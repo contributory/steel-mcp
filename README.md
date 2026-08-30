@@ -1,136 +1,182 @@
 # Steel MCP Server
 
-MCP (Model Context Protocol) Server cho Steel Browser API, hỗ trợ giao thức truyền tải Streamable HTTP.
+MCP (Model Context Protocol) server for Steel Browser API. This server provides tools for web scraping and browser automation using Steel's cloud browser infrastructure.
 
-## Cấu trúc dự án
+## Features
 
-```
-steel-mcp-server/
-├── src/
-│   ├── index.ts           # Entry point chính
-│   ├── server.ts          # MCP Server với Stdio transport
-│   ├── http-server.ts     # MCP Server với Streamable HTTP transport
-│   ├── client.ts          # Steel API Client
-│   ├── config/
-│   │   └── index.ts       # Cấu hình server
-│   ├── tools/
-│   │   ├── index.ts       # Export tất cả tools
-│   │   ├── browser.ts     # Tools thao tác trình duyệt
-│   │   └── session.ts     # Tools quản lý session
-│   └── types/
-│       └── index.ts       # Định nghĩa kiểu dữ liệu
-├── package.json
-└── tsconfig.json
-```
+- **Scrape**: Extract content from URLs without managing browser sessions
+- **Create Session**: Launch cloud browser sessions with proxies, CAPTCHA solving, and stealth mode
+- **Release Session**: Clean up browser sessions to avoid charges
+- **Get Session**: Retrieve session details
+- **Navigate**: Navigate to URLs within a session
+- **Execute Script**: Run JavaScript in the browser
+- **Screenshot**: Capture screenshots of pages
+- **Get Content**: Extract page content in various formats (HTML, markdown, text)
 
-## Cài đặt
+## Installation
 
 ```bash
-cd steel-mcp-server
 npm install
 ```
 
-## Cấu hình
+## Configuration
 
-Tạo file `.env` hoặc đặt các biến môi trường sau:
+Set your Steel API key as an environment variable:
 
 ```bash
-STEEL_API_KEY=your_api_key_here
-STEEL_API_URL=https://api.steel.dev  # Optional, default là https://api.steel.dev
-PORT=3000  # Optional, chỉ dùng cho HTTP mode
-HOST=localhost  # Optional, chỉ dùng cho HTTP mode
+export STEEL_API_KEY=your_api_key_here
 ```
 
-## Chạy server
+## Usage
 
-### Mode Stdio (mặc định - cho MCP clients qua stdin/stdout)
+### Running the Server
+
+The server runs over stdio transport, which is the standard way MCP hosts connect:
 
 ```bash
 npm start
-# hoặc dùng tsx trực tiếp
-npm run dev
 ```
 
-Server được chạy trực tiếp bằng `tsx` nên **không cần bước build**.
-
-### Mode HTTP (Streamable HTTP transport)
+Or directly:
 
 ```bash
-MCP_MODE=http npm start
-# hoặc
-MCP_MODE=http npm run dev
+node src/index.js
 ```
 
-Server sẽ chạy tại `http://localhost:3000` (có thể thay đổi qua biến môi trường).
+### Connecting from VS Code
 
-## Các công cụ (Tools) hỗ trợ
+Create `.vscode/mcp.json` in your project:
 
-### Quản lý Session
-
-- **steel_new_session**: Tạo session trình duyệt mới
-- **steel_close_session**: Đóng session
-- **steel_get_session_info**: Lấy thông tin session
-
-### Thao tác Trình duyệt
-
-- **steel_navigate**: Điều hướng đến URL
-- **steel_screenshot**: Chụp ảnh màn hình
-- **steel_click**: Nhấp vào phần tử
-- **steel_type**: Nhập văn bản vào trường
-- **steel_evaluate**: Thực thi JavaScript
-- **steel_extract**: Trích xuất dữ liệu từ trang
-- **steel_wait**: Chờ đợi (thời gian hoặc phần tử)
-
-## Ví dụ sử dụng
-
-### Kết nối từ MCP Client
-
-```typescript
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-
-const client = new Client({
-  name: 'my-client',
-  version: '1.0.0',
-});
-
-const transport = new StreamableHTTPClientTransport(
-  new URL('http://localhost:3000/mcp')
-);
-
-await client.connect(transport);
-
-// Sử dụng tools
-const result = await client.callTool({
-  name: 'steel_navigate',
-  arguments: {
-    url: 'https://example.com',
-  },
-});
-```
-
-### Gọi API trực tiếp (HTTP mode)
-
-```bash
-# Tạo session mới
-curl -X POST http://localhost:3000/mcp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "steel_new_session",
-      "arguments": {}
+```json
+{
+  "servers": {
+    "steel": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["src/index.js"],
+      "env": {
+        "STEEL_API_KEY": "your_api_key_here"
+      }
     }
-  }'
+  }
+}
 ```
 
-## Lưu ý
+### Connecting from Claude Code
 
-- Đảm bảo bạn có API key hợp lệ từ Steel
-- Session sẽ tự động tạo nếu không cung cấp `sessionId` khi gọi các tools thao tác trình duyệt
-- HTTP mode hỗ trợ nhiều kết nối đồng thời với session management
+```bash
+claude mcp add steel -- node src/index.js
+```
+
+Make sure `STEEL_API_KEY` is set in your environment.
+
+### Connecting from Cursor
+
+Create `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "steel": {
+      "command": "node",
+      "args": ["src/index.js"],
+      "env": {
+        "STEEL_API_KEY": "your_api_key_here"
+      }
+    }
+  }
+}
+```
+
+## Available Tools
+
+### 1. scrape
+
+Scrape content from a URL without creating a browser session.
+
+**Parameters:**
+- `url` (required): The URL to scrape
+- `waitForSelector` (optional): CSS selector to wait for
+- `timeout` (optional): Timeout in milliseconds
+- `removeSelector` (optional): CSS selector to remove before scraping
+- `onlyMainContent` (optional): Only extract main content
+- `includeLinks` (optional): Include extracted links
+
+### 2. create-session
+
+Create a new browser session for automation.
+
+**Parameters:**
+- `sessionId` (optional): Custom UUID for the session
+- `useProxy` (optional): Use residential proxies
+- `solveCaptcha` (optional): Enable CAPTCHA solving
+- `recordVideo` (optional): Record session video
+- `timeout` (optional): Session timeout in seconds
+
+### 3. release-session
+
+Release/end a browser session.
+
+**Parameters:**
+- `sessionId` (required): The session ID to release
+
+### 4. get-session
+
+Get details about an existing session.
+
+**Parameters:**
+- `sessionId` (required): The session ID to retrieve
+
+### 5. navigate
+
+Navigate to a URL in an existing session.
+
+**Parameters:**
+- `sessionId` (required): The session ID
+- `url` (required): The URL to navigate to
+- `waitForSelector` (optional): CSS selector to wait for
+- `timeout` (optional): Navigation timeout in ms
+- `takeScreenshot` (optional): Take screenshot after navigation
+
+### 6. execute-script
+
+Execute JavaScript in a browser session.
+
+**Parameters:**
+- `sessionId` (required): The session ID
+- `script` (required): JavaScript code to execute
+- `awaitPromise` (optional): Wait for promise resolution
+
+### 7. screenshot
+
+Take a screenshot of the current page.
+
+**Parameters:**
+- `sessionId` (required): The session ID
+- `fullPage` (optional): Capture full scrollable page
+- `selector` (optional): CSS selector of element to screenshot
+
+### 8. get-content
+
+Get page content from a session.
+
+**Parameters:**
+- `sessionId` (required): The session ID
+- `format` (optional): 'html', 'markdown', or 'text'
+
+## Example Workflow
+
+1. Create a session: `create-session({ useProxy: true, solveCaptcha: true })`
+2. Navigate: `navigate({ sessionId: "...", url: "https://example.com" })`
+3. Execute script: `execute-script({ sessionId: "...", script: "document.title" })`
+4. Take screenshot: `screenshot({ sessionId: "..." })`
+5. Release session: `release-session({ sessionId: "..." })`
+
+## Links
+
+- [Steel Documentation](https://docs.steel.dev/)
+- [Steel API Reference](https://steel.apidocumentation.com/api-reference)
+- [MCP TypeScript SDK](https://ts.sdk.modelcontextprotocol.io/)
 
 ## License
 
