@@ -2,8 +2,6 @@ import {
   McpServer,
   createMcpHandler,
 } from "@modelcontextprotocol/server";
-import { toNodeHandler } from "@modelcontextprotocol/node";
-import http from "node:http";
 import * as z from "zod/v4";
 
 const STEEL_API_BASE = "https://api.steel.dev";
@@ -502,35 +500,16 @@ const mcpHandler = createMcpHandler(async () => createServer(), {
 /**
  * Handles a single web-standard `Request` and resolves with a `Response`.
  * No Host/Origin filtering and no CORS restrictions.
- * Used by both the cloud-function default export and the local node:http
- * server below.
+ * This is the Cloudflare Pages entry point (exported as onRequest).
  */
 async function handleRequest(request) {
   return mcpHandler.fetch(request);
 }
 
 /**
- * Cloud-function friendly default export.
- * Accepts a standard Web `Request` and returns a `Response`.
+ * Cloudflare Pages Functions handler.
+ * Receives the request via context and returns a `Response`.
  */
-export default handleRequest;
-
-// Local development server using plain node:http (no Express).
-// Only starts when this file is executed directly (e.g. `node "cloud-functions/[[default]].js"`);
-// when imported by a cloud-function runtime it only exposes the default handler.
-if (
-  process.argv[1] &&
-  import.meta.url === new URL(`file://${process.argv[1]}`).href
-) {
-  const PORT = process.env.PORT || 3000;
-  const httpServer = http.createServer(toNodeHandler({ fetch: handleRequest }));
-  httpServer.listen(PORT, "0.0.0.0", () => {
-    console.error(`Steel MCP server running on port ${PORT} at /`);
-  });
-
-  // Graceful shutdown
-  process.on("SIGINT", async () => {
-    await mcpHandler.close();
-    process.exit(0);
-  });
+export async function onRequest(context) {
+  return handleRequest(context.request);
 }
