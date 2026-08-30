@@ -1,6 +1,11 @@
-import { McpServer } from "@modelcontextprotocol/server";
-import { createMcpExpressApp } from "@modelcontextprotocol/express";
-import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import {
+  McpServer,
+  createMcpHandler,
+  hostHeaderValidationResponse,
+  originValidationResponse,
+} from "@modelcontextprotocol/server";
+import { toNodeHandler } from "@modelcontextprotocol/node";
+import http from "node:http";
 import * as z from "zod/v4";
 
 const STEEL_API_BASE = "https://api.steel.dev";
@@ -488,35 +493,52 @@ function createServer() {
   return server;
 }
 
-// Create Express app with DNS rebinding protection for specific hosts
-const app = createMcpExpressApp({
-  host: "0.0.0.0",
-  allowedHosts: ["steel-mcp.wasmer.app", "localhost", "127.0.0.1"],
+// Build a web-standard MCP handler (Request -> Response) using the default
+// node:http stack instead of Express. Each request gets its own McpServer
+// instance (stateless); legacy 2025-era MCP clients are served through the
+// stateless fallback so both protocol generations share the same tools.
+const mcpHandler = createMcpHandler(async () => createServer(), {
+  legacy: "stateless",
 });
 
-// Create the MCP server instance
-const server = createServer();
+// DNS rebinding / Origin protection (same hosts as the old Express setup)
+const ALLOWED_HOSTS = ["steel-mcp.wasmer.app", "localhost", "127.0.0.1"];
 
-// Mount the stateless handler at /mcp endpoint
-app.all("/mcp", async (req, res) => {
-  // Stateless mode: create a transport per request
-  const transport = new NodeStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
+/**
+ * Handles a single web-standard `Request` and resolves with a `Response`.
+ * Applies DNS rebinding / Origin protection before delegating to the MCP
+ * handler. Used by both the cloud-function default export and the local
+ * node:http server below.
+ */
+async function handleRequest(request) {
+  const rejected =
+    hostHeaderValidationResponse(request, ALLOWED_HOSTS) ??
+    originValidationResponse(request, ALLOWED_HOSTS);
+  return rejected ?? mcpHandler.fetch(request);
+}
+
+/**
+ * Cloud-function friendly default export.
+ * Accepts a standard Web `Request` and returns a `Response`.
+ */
+export default handleRequest;
+
+// Local development server using plain node:http (no Express).
+// Only starts when this file is executed directly (e.g. `node cloud-functions/index.js`);
+// when imported by a cloud-function runtime it only exposes the default handler.
+if (
+  process.argv[1] &&
+  import.meta.url === new URL(`file://${process.argv[1]}`).href
+) {
+  const PORT = process.env.PORT || 3000;
+  const httpServer = http.createServer(toNodeHandler({ fetch: handleRequest }));
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    console.error(`Steel MCP server running on port ${PORT} at /`);
   });
-  await server.connect(transport);
-  await transport.handleRequest(req, res, req.body);
-});
 
-export default app;
-
-// Start the server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => {
-  console.error(`Steel MCP server running on port ${PORT} at /mcp`);
-});
-
-// Graceful shutdown
-process.on("SIGINT", async () => {
-  await server.close();
-  process.exit(0);
-});
+  // Graceful shutdown
+  process.on("SIGINT", async () => {
+    await mcpHandler.close();
+    process.exit(0);
+  });
+}
