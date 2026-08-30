@@ -43,10 +43,34 @@ async function steelRequest(endpoint, options = {}) {
   return response.json();
 }
 
+// JSON-only transport: the MCP SDK's POST handler normally requires clients
+// to advertise both JSON and SSE in Accept, even when JSON responses are enabled.
+// Normalize Accept internally so clients can request application/json only.
+class JsonOnlyStreamableHTTPServerTransport extends WebStandardStreamableHTTPServerTransport {
+  async handlePostRequest(request, options) {
+    const headers = new Headers(request.headers);
+    const accept = headers.get("accept") || "";
+    if (!accept.includes("text/event-stream")) {
+      headers.set("accept", accept ? `${accept}, text/event-stream` : "application/json, text/event-stream");
+    }
+    const normalizedRequest = new Request(request, { headers });
+    return super.handlePostRequest(normalizedRequest, options);
+  }
+}
+
 function createServer() {
   const server = new McpServer({
     name: "steel-browser",
     version: "1.0.0",
+    // Support all protocol revisions understood by this SDK, including the modern 2026 revision.
+    supportedProtocolVersions: [
+      "2026-07-28",
+      "2025-11-25",
+      "2025-06-18",
+      "2025-03-26",
+      "2024-11-05",
+      "2024-10-07",
+    ],
   });
 
   // Tool 1: Scrape a URL without browser session
@@ -506,7 +530,7 @@ function createServer() {
  */
 async function handleRequest(request) {
   const server = createServer();
-  const transport = new WebStandardStreamableHTTPServerTransport({
+  const transport = new JsonOnlyStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
   });

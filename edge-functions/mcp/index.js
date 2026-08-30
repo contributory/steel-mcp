@@ -24602,10 +24602,30 @@ async function steelRequest(endpoint, options = {}) {
   }
   return response.json();
 }
+var JsonOnlyStreamableHTTPServerTransport = class extends WebStandardStreamableHTTPServerTransport {
+  async handlePostRequest(request, options) {
+    const headers = new Headers(request.headers);
+    const accept = headers.get("accept") || "";
+    if (!accept.includes("text/event-stream")) {
+      headers.set("accept", accept ? `${accept}, text/event-stream` : "application/json, text/event-stream");
+    }
+    const normalizedRequest = new Request(request, { headers });
+    return super.handlePostRequest(normalizedRequest, options);
+  }
+};
 function createServer() {
   const server = new McpServer({
     name: "steel-browser",
-    version: "1.0.0"
+    version: "1.0.0",
+    // Support all protocol revisions understood by this SDK, including the modern 2026 revision.
+    supportedProtocolVersions: [
+      "2026-07-28",
+      "2025-11-25",
+      "2025-06-18",
+      "2025-03-26",
+      "2024-11-05",
+      "2024-10-07"
+    ]
   });
   server.registerTool(
     "scrape",
@@ -25012,7 +25032,7 @@ ${result.content.text.substring(0, 3e3)}
 }
 async function handleRequest(request) {
   const server = createServer();
-  const transport = new WebStandardStreamableHTTPServerTransport({
+  const transport = new JsonOnlyStreamableHTTPServerTransport({
     sessionIdGenerator: void 0,
     enableJsonResponse: true
   });
