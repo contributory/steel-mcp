@@ -14,7 +14,11 @@ USER node
 
 # Set environment variables
 ENV NODE_ENV=production
-ENV MCP_MODE=stdio
+ENV MCP_MODE=http
+ENV PORT=3000
+
+# Expose the HTTP port
+EXPOSE 3000
 
 # Run the server with Node.js
 CMD ["node", "src/index.js"]
