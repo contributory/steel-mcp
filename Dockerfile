@@ -2,6 +2,7 @@ FROM node:22-alpine
 
 # Set working directory
 WORKDIR /app
+USER root
 
 # Copy package files
 COPY package*.json ./
