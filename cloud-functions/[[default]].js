@@ -516,7 +516,7 @@ async function handleRequest(request) {
 export default handleRequest;
 
 // Local development server using plain node:http (no Express).
-// Only starts when this file is executed directly (e.g. `node cloud-functions/index.js`);
+// Only starts when this file is executed directly (e.g. `node "cloud-functions/[[default]].js"`);
 // when imported by a cloud-function runtime it only exposes the default handler.
 if (
   process.argv[1] &&
