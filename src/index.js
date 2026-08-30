@@ -375,8 +375,11 @@ function createServer() {
     return server;
 }
 
-// Create Express app with DNS rebinding protection
-const app = createMcpExpressApp();
+// Create Express app with DNS rebinding protection for specific hosts
+const app = createMcpExpressApp({
+    host: '0.0.0.0',
+    allowedHosts: ['steel-mcp.wasmer.app', 'localhost', '127.0.0.1']
+});
 
 // Create the MCP server instance
 const server = createServer();
@@ -391,8 +394,8 @@ app.post('/mcp', async (req, res) => {
 
 // Start the server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '127.0.0.1', () => {
-    console.error(`Steel MCP server running on http://127.0.0.1:${PORT}/mcp`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.error(`Steel MCP server running on port ${PORT} at /mcp`);
 });
 
 // Graceful shutdown
