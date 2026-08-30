@@ -2,12 +2,11 @@
   "name": "steel-mcp-server",
   "version": "1.0.0",
   "description": "MCP Server for Steel Browser API using Streamable HTTP transport",
-  "main": "src/index.ts",
+  "main": "src/index.js",
   "type": "module",
   "scripts": {
-    "build": "tsc",
-    "start": "tsx src/index.ts",
-    "dev": "tsx src/index.ts"
+    "start": "node src/index.js",
+    "dev": "node src/index.js"
   },
   "keywords": [
     "mcp",
@@ -19,11 +18,6 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "zod": "^3.22.4",
-    "tsx": "^4.7.0"
-  },
-  "devDependencies": {
-    "@types/node": "^20.10.0",
-    "typescript": "^5.3.0"
+    "zod": "^3.22.4"
   }
 }
