@@ -1,5 +1,4 @@
-# Build stage
-FROM node:20-alpine AS builder
+FROM node:20-alpine
 
 WORKDIR /app
 
@@ -8,25 +7,14 @@ COPY package*.json ./
 COPY tsconfig.json ./
 COPY src/ ./src/
 
-# Install dependencies
+# Install dependencies and build
 RUN npm ci
 
 # Build TypeScript
 RUN npm run build
 
-# Production stage
-FROM node:20-alpine
-
-WORKDIR /app
-
-# Copy package files for production
-COPY package*.json ./
-
-# Install only production dependencies
-RUN npm ci --only=production
-
-# Copy built files from builder stage
-COPY --from=builder /app/dist ./dist
+# Install only production dependencies and clean cache
+RUN npm ci --only=production && npm cache clean --force
 
 # Expose HTTP port (if using HTTP transport)
 EXPOSE 3000
