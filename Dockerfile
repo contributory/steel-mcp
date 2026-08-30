@@ -2,21 +2,14 @@ FROM node:22-alpine
 
 # Set working directory
 WORKDIR /app
-USER root
 
 # Copy package files
 COPY package*.json ./
 COPY tsconfig.json ./
 COPY src/ ./src/
 
-# Install dependencies and build
-RUN npm ci
-
-# Build TypeScript
-RUN npm run build
-
-# Install only production dependencies and clean cache
-RUN npm ci --only=production && npm cache clean --force
+# Install dependencies (tsx được dùng để chạy TypeScript trực tiếp, không cần build)
+RUN npm ci && npm cache clean --force
 
 USER node
 
@@ -24,5 +17,5 @@ USER node
 ENV NODE_ENV=production
 ENV MCP_MODE=stdio
 
-# Run the server
-CMD ["node", "dist/index.js"]
+# Chạy server trực tiếp bằng tsx (không cần bước build)
+CMD ["node_modules/.bin/tsx", "src/index.ts"]

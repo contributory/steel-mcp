@@ -14,12 +14,16 @@ const __dirname = dirname(__filename);
 // Lấy mode từ environment variable hoặc argument
 const mode = process.env.MCP_MODE || process.argv[2] || 'stdio';
 
+// Sử dụng tsx để chạy trực tiếp file TypeScript, không cần bước build
+const tsxBin = process.env.TSX_BIN || 'npx';
+const tsxArgs = process.env.TSX_BIN ? [] : ['tsx'];
+
 console.error(`Starting Steel MCP Server in ${mode} mode...`);
 
 if (mode === 'http') {
   // Chạy HTTP server với Streamable HTTP transport
-  const httpServerPath = join(__dirname, 'http-server.js');
-  const child = spawn('node', [httpServerPath], {
+  const httpServerPath = join(__dirname, 'http-server.ts');
+  const child = spawn(tsxBin, [...tsxArgs, httpServerPath], {
     stdio: 'inherit',
     env: { ...process.env },
   });
@@ -35,8 +39,8 @@ if (mode === 'http') {
   });
 } else {
   // Chạy Stdio server (mặc định)
-  const stdioServerPath = join(__dirname, 'server.js');
-  const child = spawn('node', [stdioServerPath], {
+  const stdioServerPath = join(__dirname, 'server.ts');
+  const child = spawn(tsxBin, [...tsxArgs, stdioServerPath], {
     stdio: 'inherit',
     env: { ...process.env },
   });
