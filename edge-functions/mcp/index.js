@@ -508,6 +508,7 @@ async function handleRequest(request) {
 
 /**
  * EdgeOne Pages function handler (Node/edge runtime).
+ * Served at the `/mcp` route (file: edge-functions/mcp/index.js).
  * Receives the request via context and returns a `Response`.
  * Accepted EdgeOne signature: default export named `onRequest`.
  */

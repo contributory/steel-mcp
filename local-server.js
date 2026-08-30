@@ -4,7 +4,7 @@
 import http from "node:http";
 import { webcrypto } from "node:crypto";
 import { toNodeHandler } from "@modelcontextprotocol/node";
-import onRequest from "./edge-functions/[[default]].js";
+import onRequest from "./edge-functions/mcp/index.js";
 
 // Node 18 does not expose the Web Crypto global in ESM scope; EdgeOne
 // provides it natively. Polyfill it only for local development.
