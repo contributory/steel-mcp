@@ -24,21 +24,22 @@ async function main() {
   // Tạo Steel Client
   const steelClient = new SteelClient(DEFAULT_CONFIG);
 
-  // Tạo MCP Server
-  const server = new McpServer({
-    name: MCP_SERVER_CONFIG.name,
-    version: MCP_SERVER_CONFIG.version,
-  });
-
-  // Đăng ký tất cả các tools (tương tự như trong server.ts)
-  registerTools(server, steelClient);
-
   // Tạo HTTP server
   const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
-      // Tạo transport cho mỗi request
+      // Tạo MCP Server mới cho mỗi request để tránh lỗi "Already connected to a transport"
+      const server = new McpServer({
+        name: MCP_SERVER_CONFIG.name,
+        version: MCP_SERVER_CONFIG.version,
+      });
+
+      // Đăng ký tất cả các tools
+      registerTools(server, steelClient);
+
+      // Tạo transport cho mỗi request - dùng stateless mode (sessionIdGenerator: undefined)
+      // Vì mỗi request HTTP tạo một McpServer instance mới, không cần session management
       const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
+        sessionIdGenerator: undefined, // Stateless mode - mỗi request độc lập
         onsessioninitialized: (sessionId: string) => {
           console.error(`Session initialized: ${sessionId}`);
         },
