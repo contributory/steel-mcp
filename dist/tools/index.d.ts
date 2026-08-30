@@ -1,3 +1,0 @@
-export * from './browser.js';
-export * from './session.js';
-//# sourceMappingURL=index.d.ts.map
