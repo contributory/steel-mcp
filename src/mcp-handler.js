@@ -1,18 +1,35 @@
-import {
-  McpServer,
-  createMcpHandler,
-} from "@modelcontextprotocol/server";
+// Steel MCP server — EdgeOne Pages function (JSON-RPC over HTTP, no SSE).
+//
+// EdgeOne Pages does not support SSE streaming responses, and the MCP SDK's
+// legacy Streamable HTTP transport always uses SSE. So this function implements
+// the MCP protocol by hand over plain JSON request/response:
+//   - POST a JSON-RPC message -> JSON-RPC response (application/json)
+//   - Notifications -> HTTP 202 with empty body
+//
+// This is a stateless, tools-only server, fully compatible with standard MCP
+// clients (initialize -> initialized -> tools/list -> tools/call -> ping).
+
 import * as z from "zod/v4";
 
-// Environment store that works on Node.js (`process.env`) and EdgeOne Pages
-// (`context.env`). EdgeOne functions receive env via the context argument, so
-// onRequest copies it into this store before handling the request.
+// ---------------------------------------------------------------------------
+// Environment
+// ---------------------------------------------------------------------------
+// Works on Node.js (`process.env`) and EdgeOne Pages (`context.env`). EdgeOne
+// functions receive env via the context argument, so onRequest copies it into
+// this store before handling the request.
 const envStore =
   typeof globalThis.process !== "undefined" && globalThis.process.env
     ? globalThis.process.env
     : {};
 
 const STEEL_API_BASE = "https://api.steel.dev";
+const SERVER_INFO = { name: "steel-browser", version: "1.0.0" };
+const SUPPORTED_PROTOCOL_VERSIONS = [
+  "2025-03-26",
+  "2025-06-18",
+  "2024-11-05",
+];
+const DEFAULT_PROTOCOL_VERSION = "2025-03-26";
 
 /**
  * Helper to make requests to Steel API
@@ -43,52 +60,47 @@ async function steelRequest(endpoint, options = {}) {
   return response.json();
 }
 
-function createServer() {
-  const server = new McpServer({
-    name: "steel-browser",
-    version: "1.0.0",
-  });
-
-  // Tool 1: Scrape a URL without browser session
-  server.registerTool(
-    "scrape",
-    {
-      description:
-        "Scrape content from a URL using Steel API. Returns HTML, markdown, cleaned HTML, readability text, metadata and extracted links.",
-      inputSchema: z.object({
-        url: z.string().url().describe("The URL to scrape"),
-        waitForSelector: z
-          .string()
-          .optional()
-          .describe("CSS selector to wait for before scraping"),
-        timeout: z
-          .number()
-          .optional()
-          .describe("Timeout in milliseconds (default: 30000)"),
-        removeSelector: z
-          .string()
-          .optional()
-          .describe("CSS selector to remove from page before scraping"),
-        onlyMainContent: z
-          .boolean()
-          .optional()
-          .describe(
-            "Only extract main content, excluding navigation and footers",
-          ),
-        includeLinks: z
-          .boolean()
-          .optional()
-          .describe("Include extracted links in response"),
-      }),
-    },
-    async ({
+// ---------------------------------------------------------------------------
+// Tools
+// ---------------------------------------------------------------------------
+const TOOLS = [
+  {
+    name: "scrape",
+    description:
+      "Scrape content from a URL using Steel API. Returns HTML, markdown, cleaned HTML, readability text, metadata and extracted links.",
+    inputSchema: z.object({
+      url: z.string().url().describe("The URL to scrape"),
+      waitForSelector: z
+        .string()
+        .optional()
+        .describe("CSS selector to wait for before scraping"),
+      timeout: z
+        .number()
+        .optional()
+        .describe("Timeout in milliseconds (default: 30000)"),
+      removeSelector: z
+        .string()
+        .optional()
+        .describe("CSS selector to remove from page before scraping"),
+      onlyMainContent: z
+        .boolean()
+        .optional()
+        .describe(
+          "Only extract main content, excluding navigation and footers",
+        ),
+      includeLinks: z
+        .boolean()
+        .optional()
+        .describe("Include extracted links in response"),
+    }),
+    async run({
       url,
       waitForSelector,
       timeout,
       removeSelector,
       onlyMainContent,
       includeLinks,
-    }) => {
+    }) {
       try {
         const requestBody = { url };
         if (waitForSelector) requestBody.waitForSelector = waitForSelector;
@@ -132,35 +144,32 @@ function createServer() {
         };
       }
     },
-  );
+  },
 
-  // Tool 2: Create a browser session
-  server.registerTool(
-    "create-session",
-    {
-      description:
-        "Create a new Steel browser session for automation. Returns session ID and WebSocket URL for connecting Puppeteer/Playwright.",
-      inputSchema: z.object({
-        sessionId: z
-          .string()
-          .uuid()
-          .optional()
-          .describe(
-            "Custom session ID (UUID). If not provided, Steel generates one.",
-          ),
-        useProxy: z.boolean().optional().describe("Use residential proxies"),
-        solveCaptcha: z
-          .boolean()
-          .optional()
-          .describe("Enable automatic CAPTCHA solving"),
-        recordVideo: z
-          .boolean()
-          .optional()
-          .describe("Record video of the session"),
-        timeout: z.number().optional().describe("Session timeout in seconds"),
-      }),
-    },
-    async ({ sessionId, useProxy, solveCaptcha, recordVideo, timeout }) => {
+  {
+    name: "create-session",
+    description:
+      "Create a new Steel browser session for automation. Returns session ID and WebSocket URL for connecting Puppeteer/Playwright.",
+    inputSchema: z.object({
+      sessionId: z
+        .string()
+        .uuid()
+        .optional()
+        .describe(
+          "Custom session ID (UUID). If not provided, Steel generates one.",
+        ),
+      useProxy: z.boolean().optional().describe("Use residential proxies"),
+      solveCaptcha: z
+        .boolean()
+        .optional()
+        .describe("Enable automatic CAPTCHA solving"),
+      recordVideo: z
+        .boolean()
+        .optional()
+        .describe("Record video of the session"),
+      timeout: z.number().optional().describe("Session timeout in seconds"),
+    }),
+    async run({ sessionId, useProxy, solveCaptcha, recordVideo, timeout }) {
       try {
         const requestBody = {};
         if (sessionId) requestBody.sessionId = sessionId;
@@ -200,19 +209,16 @@ function createServer() {
         };
       }
     },
-  );
+  },
 
-  // Tool 3: Release a browser session
-  server.registerTool(
-    "release-session",
-    {
-      description:
-        "Release/end a Steel browser session. Always call this when done with a session to avoid charges.",
-      inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to release"),
-      }),
-    },
-    async ({ sessionId }) => {
+  {
+    name: "release-session",
+    description:
+      "Release/end a Steel browser session. Always call this when done with a session to avoid charges.",
+    inputSchema: z.object({
+      sessionId: z.string().describe("The session ID to release"),
+    }),
+    async run({ sessionId }) {
       try {
         await steelRequest(`/v1/sessions/${sessionId}`, {
           method: "DELETE",
@@ -238,18 +244,15 @@ function createServer() {
         };
       }
     },
-  );
+  },
 
-  // Tool 4: Get session details
-  server.registerTool(
-    "get-session",
-    {
-      description: "Get details about an existing Steel browser session.",
-      inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to retrieve"),
-      }),
-    },
-    async ({ sessionId }) => {
+  {
+    name: "get-session",
+    description: "Get details about an existing Steel browser session.",
+    inputSchema: z.object({
+      sessionId: z.string().describe("The session ID to retrieve"),
+    }),
+    async run({ sessionId }) {
       try {
         const session = await steelRequest(`/v1/sessions/${sessionId}`);
 
@@ -279,32 +282,29 @@ function createServer() {
         };
       }
     },
-  );
+  },
 
-  // Tool 5: Navigate in a session
-  server.registerTool(
-    "navigate",
-    {
-      description:
-        "Navigate to a URL in an existing Steel browser session and optionally take a screenshot.",
-      inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to navigate in"),
-        url: z.string().url().describe("The URL to navigate to"),
-        waitForSelector: z
-          .string()
-          .optional()
-          .describe("CSS selector to wait for after navigation"),
-        timeout: z
-          .number()
-          .optional()
-          .describe("Navigation timeout in milliseconds"),
-        takeScreenshot: z
-          .boolean()
-          .optional()
-          .describe("Take a screenshot after navigation"),
-      }),
-    },
-    async ({ sessionId, url, waitForSelector, timeout, takeScreenshot }) => {
+  {
+    name: "navigate",
+    description:
+      "Navigate to a URL in an existing Steel browser session and optionally take a screenshot.",
+    inputSchema: z.object({
+      sessionId: z.string().describe("The session ID to navigate in"),
+      url: z.string().url().describe("The URL to navigate to"),
+      waitForSelector: z
+        .string()
+        .optional()
+        .describe("CSS selector to wait for after navigation"),
+      timeout: z
+        .number()
+        .optional()
+        .describe("Navigation timeout in milliseconds"),
+      takeScreenshot: z
+        .boolean()
+        .optional()
+        .describe("Take a screenshot after navigation"),
+    }),
+    async run({ sessionId, url, waitForSelector, timeout, takeScreenshot }) {
       try {
         const requestBody = { url };
         if (waitForSelector) requestBody.waitForSelector = waitForSelector;
@@ -342,26 +342,23 @@ function createServer() {
         };
       }
     },
-  );
+  },
 
-  // Tool 6: Execute JavaScript in a session
-  server.registerTool(
-    "execute-script",
-    {
-      description:
-        "Execute JavaScript code in a Steel browser session and return the result.",
-      inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to execute script in"),
-        script: z
-          .string()
-          .describe("JavaScript code to execute in the browser"),
-        awaitPromise: z
-          .boolean()
-          .optional()
-          .describe("Wait for the script to return a promise"),
-      }),
-    },
-    async ({ sessionId, script, awaitPromise }) => {
+  {
+    name: "execute-script",
+    description:
+      "Execute JavaScript code in a Steel browser session and return the result.",
+    inputSchema: z.object({
+      sessionId: z.string().describe("The session ID to execute script in"),
+      script: z
+        .string()
+        .describe("JavaScript code to execute in the browser"),
+      awaitPromise: z
+        .boolean()
+        .optional()
+        .describe("Wait for the script to return a promise"),
+    }),
+    async run({ sessionId, script, awaitPromise }) {
       try {
         const requestBody = { script };
         if (awaitPromise !== undefined) requestBody.awaitPromise = awaitPromise;
@@ -389,27 +386,24 @@ function createServer() {
         };
       }
     },
-  );
+  },
 
-  // Tool 7: Take a screenshot
-  server.registerTool(
-    "screenshot",
-    {
-      description:
-        "Take a screenshot of the current page in a Steel browser session.",
-      inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to take screenshot in"),
-        fullPage: z
-          .boolean()
-          .optional()
-          .describe("Capture full scrollable page"),
-        selector: z
-          .string()
-          .optional()
-          .describe("CSS selector of element to screenshot"),
-      }),
-    },
-    async ({ sessionId, fullPage, selector }) => {
+  {
+    name: "screenshot",
+    description:
+      "Take a screenshot of the current page in a Steel browser session.",
+    inputSchema: z.object({
+      sessionId: z.string().describe("The session ID to take screenshot in"),
+      fullPage: z
+        .boolean()
+        .optional()
+        .describe("Capture full scrollable page"),
+      selector: z
+        .string()
+        .optional()
+        .describe("CSS selector of element to screenshot"),
+    }),
+    async run({ sessionId, fullPage, selector }) {
       try {
         const requestBody = {};
         if (fullPage !== undefined) requestBody.fullPage = fullPage;
@@ -442,23 +436,20 @@ function createServer() {
         };
       }
     },
-  );
+  },
 
-  // Tool 8: Get page content
-  server.registerTool(
-    "get-content",
-    {
-      description:
-        "Get the current page content (HTML, markdown, text) from a Steel browser session.",
-      inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to get content from"),
-        format: z
-          .enum(["html", "markdown", "text"])
-          .optional()
-          .describe("Content format to return"),
-      }),
-    },
-    async ({ sessionId, format }) => {
+  {
+    name: "get-content",
+    description:
+      "Get the current page content (HTML, markdown, text) from a Steel browser session.",
+    inputSchema: z.object({
+      sessionId: z.string().describe("The session ID to get content from"),
+      format: z
+        .enum(["html", "markdown", "text"])
+        .optional()
+        .describe("Content format to return"),
+    }),
+    async run({ sessionId, format }) {
       try {
         const requestBody = {};
         if (format) requestBody.format = format;
@@ -492,30 +483,128 @@ function createServer() {
         };
       }
     },
-  );
+  },
+];
 
-  return server;
+// ---------------------------------------------------------------------------
+// JSON-RPC helpers
+// ---------------------------------------------------------------------------
+function jsonRpcResponse(id, result) {
+  return { jsonrpc: "2.0", id: id ?? null, result };
 }
 
-// Build a web-standard MCP handler (Request -> Response) using the default
-// node:http stack instead of Express. Each request gets its own McpServer
-// instance (stateless); legacy 2025-era MCP clients are served through the
-// stateless fallback so both protocol generations share the same tools.
-const mcpHandler = createMcpHandler(async () => createServer(), {
-  legacy: "stateless",
-  // Force plain JSON responses instead of SSE streams. Many serverless/edge
-  // runtimes (e.g. EdgeOne Pages) cannot return long-lived streaming bodies,
-  // which would surface as an "Error return from script".
-  responseMode: "json",
-});
+function jsonRpcError(id, code, message) {
+  return { jsonrpc: "2.0", id: id ?? null, error: { code, message } };
+}
 
-/**
- * Handles a single web-standard `Request` and resolves with a `Response`.
- * No Host/Origin filtering and no CORS restrictions.
- * This is the EdgeOne Pages entry point (default export `onRequest`).
- */
+function httpJson(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+function zodToJsonSchema(schema) {
+  return typeof z.toJSONSchema === "function"
+    ? z.toJSONSchema(schema)
+    : schema;
+}
+
+// ---------------------------------------------------------------------------
+// Request dispatch
+// ---------------------------------------------------------------------------
 async function handleRequest(request) {
-  return mcpHandler.fetch(request);
+  if (request.method !== "POST") {
+    // GET is used for discovery/health by some clients; return a simple body.
+    return new Response(
+      "Steel MCP server. POST JSON-RPC messages to this endpoint.",
+      {
+        status: request.method === "GET" ? 200 : 405,
+        headers: { "content-type": "text/plain" },
+      },
+    );
+  }
+
+  let msg;
+  try {
+    msg = await request.json();
+  } catch {
+    return httpJson(jsonRpcError(null, -32700, "Parse error"), 400);
+  }
+
+  const id = msg?.id ?? null;
+
+  switch (msg?.method) {
+    case "initialize": {
+      const requested = msg.params?.protocolVersion;
+      const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requested)
+        ? requested
+        : DEFAULT_PROTOCOL_VERSION;
+      return httpJson(
+        jsonRpcResponse(id, {
+          protocolVersion,
+          capabilities: { tools: { listChanged: false } },
+          serverInfo: SERVER_INFO,
+        }),
+      );
+    }
+
+    case "notifications/initialized":
+    case "notifications/cancelled":
+    case "notifications/progress":
+    case "notifications/roots/list_changed":
+    case "notifications/tools/list_changed": {
+      // Notifications carry no response body.
+      return new Response(null, { status: 202 });
+    }
+
+    case "ping":
+      return httpJson(jsonRpcResponse(id, {}));
+
+    case "tools/list":
+      return httpJson(
+        jsonRpcResponse(id, {
+          tools: TOOLS.map(({ name, description, inputSchema }) => ({
+            name,
+            description,
+            inputSchema: zodToJsonSchema(inputSchema),
+          })),
+        }),
+      );
+
+    case "tools/call": {
+      const { name, arguments: rawArgs } = msg.params ?? {};
+      const tool = TOOLS.find((t) => t.name === name);
+      if (!tool) {
+        return httpJson(jsonRpcError(id, -32602, `Unknown tool: ${name}`));
+      }
+      try {
+        const args = tool.inputSchema.parse(rawArgs ?? {});
+        const result = await tool.run(args);
+        return httpJson(jsonRpcResponse(id, result));
+      } catch (error) {
+        return httpJson(
+          jsonRpcResponse(id, {
+            content: [
+              {
+                type: "text",
+                text: `Error calling ${name}: ${error.message}`,
+              },
+            ],
+            isError: true,
+          }),
+        );
+      }
+    }
+
+    default:
+      return httpJson(
+        jsonRpcError(id, -32601, `Method not found: ${msg?.method}`),
+      );
+  }
 }
 
 /**
