@@ -507,6 +507,8 @@ app.all("/mcp", async (req, res) => {
   await transport.handleRequest(req, res, req.body);
 });
 
+export default app;
+
 // Start the server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
