@@ -46,19 +46,19 @@ HOST=localhost  # Optional, chỉ dùng cho HTTP mode
 ### Mode Stdio (mặc định - cho MCP clients qua stdin/stdout)
 
 ```bash
-npm run dev
-# hoặc build rồi chạy
-npm run build
 npm start
+# hoặc dùng tsx trực tiếp
+npm run dev
 ```
+
+Server được chạy trực tiếp bằng `tsx` nên **không cần bước build**.
 
 ### Mode HTTP (Streamable HTTP transport)
 
 ```bash
-MCP_MODE=http npm run dev
-# hoặc
-npm run build
 MCP_MODE=http npm start
+# hoặc
+MCP_MODE=http npm run dev
 ```
 
 Server sẽ chạy tại `http://localhost:3000` (có thể thay đổi qua biến môi trường).

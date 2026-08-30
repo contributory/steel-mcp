@@ -2,7 +2,7 @@
   "name": "steel-mcp-server",
   "version": "1.0.0",
   "description": "MCP Server for Steel Browser API using Streamable HTTP transport",
-  "main": "dist/index.js",
+  "main": "src/index.ts",
   "type": "module",
   "scripts": {
     "build": "tsc",
