@@ -19,6 +19,7 @@ RUN npm ci --only=production && npm cache clean --force
 
 # Expose HTTP port (if using HTTP transport)
 EXPOSE 3000
+USER node
 
 # Set environment variables
 ENV NODE_ENV=production
