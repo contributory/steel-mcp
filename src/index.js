@@ -1,7 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/server';
-import { createMcpHandler } from '@modelcontextprotocol/server';
 import { createMcpExpressApp } from '@modelcontextprotocol/express';
-import { toNodeHandler } from '@modelcontextprotocol/node';
+import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import * as z from 'zod/v4';
 
 const STEEL_API_BASE = 'https://api.steel.dev';
@@ -376,15 +375,19 @@ function createServer() {
     return server;
 }
 
-// Create the MCP handler for Streamable HTTP
-const handler = createMcpHandler(createServer);
-
 // Create Express app with DNS rebinding protection
 const app = createMcpExpressApp();
 
-// Mount the handler at /mcp endpoint
-const nodeHandler = toNodeHandler(handler);
-app.all('/mcp', (req, res) => void nodeHandler(req, res, req.body));
+// Create the MCP server instance
+const server = createServer();
+
+// Mount the stateless handler at /mcp endpoint
+app.post('/mcp', async (req, res) => {
+    // Stateless mode: create a transport per request
+    const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+});
 
 // Start the server
 const PORT = process.env.PORT || 3000;
@@ -394,6 +397,6 @@ app.listen(PORT, '127.0.0.1', () => {
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
-    await handler.close();
+    await server.close();
     process.exit(0);
 });
