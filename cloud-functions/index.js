@@ -1,8 +1,6 @@
 import {
   McpServer,
   createMcpHandler,
-  hostHeaderValidationResponse,
-  originValidationResponse,
 } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import http from "node:http";
@@ -501,20 +499,14 @@ const mcpHandler = createMcpHandler(async () => createServer(), {
   legacy: "stateless",
 });
 
-// DNS rebinding / Origin protection (same hosts as the old Express setup)
-const ALLOWED_HOSTS = ["steel-mcp.wasmer.app", "localhost", "127.0.0.1"];
-
 /**
  * Handles a single web-standard `Request` and resolves with a `Response`.
- * Applies DNS rebinding / Origin protection before delegating to the MCP
- * handler. Used by both the cloud-function default export and the local
- * node:http server below.
+ * No Host/Origin filtering and no CORS restrictions.
+ * Used by both the cloud-function default export and the local node:http
+ * server below.
  */
 async function handleRequest(request) {
-  const rejected =
-    hostHeaderValidationResponse(request, ALLOWED_HOSTS) ??
-    originValidationResponse(request, ALLOWED_HOSTS);
-  return rejected ?? mcpHandler.fetch(request);
+  return mcpHandler.fetch(request);
 }
 
 /**
