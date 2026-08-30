@@ -500,16 +500,17 @@ const mcpHandler = createMcpHandler(async () => createServer(), {
 /**
  * Handles a single web-standard `Request` and resolves with a `Response`.
  * No Host/Origin filtering and no CORS restrictions.
- * This is the Cloudflare Pages entry point (exported as onRequest).
+ * This is the EdgeOne Pages entry point (default export `onRequest`).
  */
 async function handleRequest(request) {
   return mcpHandler.fetch(request);
 }
 
 /**
- * Cloudflare Pages Functions handler.
+ * EdgeOne Pages function handler (Node/edge runtime).
  * Receives the request via context and returns a `Response`.
+ * Accepted EdgeOne signature: default export named `onRequest`.
  */
-export async function onRequest(context) {
+export default async function onRequest(context) {
   return handleRequest(context.request);
 }
