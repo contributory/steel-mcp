@@ -1,5 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
-import { serveStdio } from '@modelcontextprotocol/server/stdio';
+import { createMcpHandler } from '@modelcontextprotocol/server';
+import { createMcpExpressApp } from '@modelcontextprotocol/express';
+import { toNodeHandler } from '@modelcontextprotocol/node';
 import * as z from 'zod/v4';
 
 const STEEL_API_BASE = 'https://api.steel.dev';
@@ -374,6 +376,24 @@ function createServer() {
     return server;
 }
 
+// Create the MCP handler for Streamable HTTP
+const handler = createMcpHandler(createServer);
+
+// Create Express app with DNS rebinding protection
+const app = createMcpExpressApp();
+
+// Mount the handler at /mcp endpoint
+const nodeHandler = toNodeHandler(handler);
+app.all('/mcp', (req, res) => void nodeHandler(req, res, req.body));
+
 // Start the server
-void serveStdio(createServer);
-console.error('Steel MCP server running on stdio');
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '127.0.0.1', () => {
+    console.error(`Steel MCP server running on http://127.0.0.1:${PORT}/mcp`);
+});
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+    await handler.close();
+    process.exit(0);
+});
