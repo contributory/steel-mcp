@@ -42,5 +42,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.error(`Steel MCP server running on port ${PORT} at /mcp`);
+  console.error(`Steel MCP server running on port ${PORT} at http://localhost:${PORT}/mcp`);
 });
