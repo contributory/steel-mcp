@@ -1,4 +1,7 @@
-import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
+import {
+  McpServer,
+  WebStandardStreamableHTTPServerTransport,
+} from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
 
 const STEEL_API_BASE = "https://api.steel.dev";
@@ -528,25 +531,67 @@ function createServer(env = {}) {
   return server;
 }
 
-// EdgeOne Pages entry point
+// EdgeOne Pages entry point — fully stateless (no MCP session).
+// Each request creates a fresh server + transport. JSON-only responses
+// (enableJsonResponse) avoid SSE, which EdgeOne does not support reliably.
 const onRequest = async (context) => {
   const request = context instanceof Request ? context : context?.request;
 
   if (!request) {
-    return new Response("Invalid request: No Request object provided", {
-      status: 400,
-    });
+    return new Response(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        error: { code: -32600, message: "Invalid request: No Request object" },
+        id: null,
+      }),
+      { status: 400, headers: { "content-type": "application/json" } },
+    );
+  }
+
+  // Only POST is meaningful in stateless Streamable HTTP.
+  if (request.method.toUpperCase() !== "POST") {
+    return new Response(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Method not allowed." },
+        id: null,
+      }),
+      { status: 405, headers: { "content-type": "application/json" } },
+    );
   }
 
   const env = context?.env || {};
-
-  const handler = createMcpHandler(() => createServer(env), {
-    onerror: (error) => {
-      console.error("[mcp-handler] onerror:", error);
-    },
+  const server = createServer(env);
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined, // stateless — no Mcp-Session-Id
+    enableJsonResponse: true, // pure JSON, no SSE stream
   });
 
-  return handler.fetch(request);
+  try {
+    await server.connect(transport);
+    return await transport.handleRequest(request);
+  } catch (error) {
+    console.error("[mcp-handler] error:", error);
+    return new Response(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        error: {
+          code: -32603,
+          message: error?.message || "Internal server error",
+        },
+        id: null,
+      }),
+      { status: 500, headers: { "content-type": "application/json" } },
+    );
+  } finally {
+    // Best-effort cleanup; ignore failures after the response is sent.
+    try {
+      await transport.close();
+    } catch {}
+    try {
+      await server.close();
+    } catch {}
+  }
 };
 
 export default onRequest;
