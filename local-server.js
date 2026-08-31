@@ -2,7 +2,7 @@
 // Run: npm run build:edge && node local-server.js
 // Serves the bundled EdgeOne function at http://localhost:PORT/mcp
 import http from "node:http";
-import onRequest from "./edge-functions/mcp/index.js";
+import onRequest from "./cloud-functions/mcp/index.js";
 
 const PORT = process.env.PORT || 3000;
 
