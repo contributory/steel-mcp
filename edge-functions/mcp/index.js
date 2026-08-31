@@ -503,9 +503,26 @@ function createServer() {
   return server;
 }
 
-const server = createServer();
+// v2 SDK expects a server FACTORY (called per request: modern + legacy legs),
+// not a shared instance — each request gets a fresh McpServer.
+const handler = createMcpHandler(
+  () => createServer(),
+  {
+    onerror: (error) => {
+      console.error("[mcp-handler] onerror:", error);
+    },
+  },
+);
 
-const handler = createMcpHandler(server);
+const mcpFetch = handler.fetch;
 
-const onRequest = handler.fetch;
+// EdgeOne Pages calls onRequest(context) where context = { request, env, ... }.
+// The MCP SDK's fetch face expects the Request itself as the first argument,
+// so unwrap the context here (and support being called with a bare Request).
+const onRequest = async (context) => {
+  const request = context instanceof Request ? context : context?.request;
+  if (context?.env) Object.assign(envStore, context.env);
+  return mcpFetch(request);
+};
+
 export default onRequest;

@@ -11,6 +11,8 @@ const server = http.createServer(async (req, res) => {
     let body = "";
     for await (const chunk of req) body += chunk;
 
+    console.error("[local-server] req", req.method, req.url, "body=", body?.slice?.(0, 200));
+
     const request = new Request(
       `http://${req.headers.host ?? "localhost"}${req.url ?? "/"}`,
       {
@@ -21,15 +23,17 @@ const server = http.createServer(async (req, res) => {
     );
 
     const response = await onRequest({ request, env: process.env });
+    console.error("[local-server] resp status", response.status);
 
     res.writeHead(response.status, Object.fromEntries(response.headers));
     res.end(await response.text());
   } catch (err) {
+    console.error("[local-server] error:", err);
     res.writeHead(500, { "content-type": "application/json" });
     res.end(
       JSON.stringify({
         jsonrpc: "2.0",
-        error: { code: -32603, message: err.message },
+        error: { code: -32603, message: err.message, stack: err.stack },
         id: null,
       }),
     );
