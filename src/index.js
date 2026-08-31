@@ -507,11 +507,15 @@ function createServer() {
   return server;
 }
 
-const handler = createMcpHandler(createServer());
+const server = createServer();
+
 const transport = new WebStandardStreamableHTTPServerTransport({
   sessionIdGenerator: undefined,
   enableJsonResponse: true,
 });
-await handler.connect(transport);
+
+server.connect(transport);
+
+const handler = createMcpHandler(server);
 
 export default handler.fetch;

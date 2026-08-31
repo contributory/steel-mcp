@@ -3,7 +3,7 @@
 // Serves the bundled EdgeOne function at http://localhost:PORT/mcp
 import http from "node:http";
 import { webcrypto } from "node:crypto";
-import onRequest from "./edge-functions/mcp/index.js";
+import * as fetch from "./src/index.js";
 
 // The Edge runtime provides global Web Crypto; Node's dev adapter needs to
 // expose it so the bundled MCP transport can generate request stream IDs.
@@ -25,7 +25,7 @@ const server = http.createServer(async (req, res) => {
       },
     );
 
-    const response = await onRequest({ request, env: process.env });
+    const response = await fetch({ request, env: process.env });
 
     res.writeHead(response.status, Object.fromEntries(response.headers));
     res.end(await response.text());
@@ -42,5 +42,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.error(`Steel MCP server running on port ${PORT} at http://localhost:${PORT}/mcp`);
+  console.error(
+    `Steel MCP server running on port ${PORT} at http://localhost:${PORT}/mcp`,
+  );
 });
