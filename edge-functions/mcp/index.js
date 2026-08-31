@@ -1,8 +1,4 @@
-import {
-  createMcpHandler,
-  McpServer,
-  WebStandardStreamableHTTPServerTransport,
-} from "@modelcontextprotocol/server";
+import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 
 // Environment store that works on Node.js (`process.env`) and EdgeOne Pages
@@ -508,13 +504,6 @@ function createServer() {
 }
 
 const server = createServer();
-
-const transport = new WebStandardStreamableHTTPServerTransport({
-  sessionIdGenerator: undefined,
-  enableJsonResponse: true,
-});
-
-server.connect(transport);
 
 const handler = createMcpHandler(server);
 

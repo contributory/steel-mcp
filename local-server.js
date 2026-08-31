@@ -2,12 +2,7 @@
 // Run: npm run build:edge && node local-server.js
 // Serves the bundled EdgeOne function at http://localhost:PORT/mcp
 import http from "node:http";
-import { webcrypto } from "node:crypto";
-import onRequest from "./src/index.js";
-
-// The Edge runtime provides global Web Crypto; Node's dev adapter needs to
-// expose it so the bundled MCP transport can generate request stream IDs.
-if (!globalThis.crypto) globalThis.crypto = webcrypto;
+import onRequest from "./edge-functions/mcp/index.js";
 
 const PORT = process.env.PORT || 3000;
 
