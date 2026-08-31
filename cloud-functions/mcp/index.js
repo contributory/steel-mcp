@@ -3,6 +3,7 @@ import {
   WebStandardStreamableHTTPServerTransport,
 } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
+import WebSocket from "ws";
 
 const STEEL_API_BASE = "https://api.steel.dev";
 
@@ -73,10 +74,156 @@ function formatComputerResult(result) {
   return output || JSON.stringify(result);
 }
 
+
+/** Resolve Steel session websocket URL + API key for CDP */
+async function getSessionCdpEndpoint(sessionId, env) {
+  const apiKey =
+    env.STEEL_API_KEY ||
+    (typeof globalThis.process !== "undefined" &&
+      globalThis.process.env?.STEEL_API_KEY);
+  if (!apiKey) throw new Error("STEEL_API_KEY environment variable is required");
+
+  const session = await steelRequest(`/v1/sessions/${sessionId}`, {}, env);
+  const base =
+    session.websocketUrl ||
+    session.websocket_url ||
+    `wss://connect.steel.dev?sessionId=${sessionId}`;
+  const sep = base.includes("?") ? "&" : "?";
+  // Prefer appending apiKey if not already present
+  const wsUrl = /apiKey=/i.test(base)
+    ? base
+    : `${base}${sep}apiKey=${encodeURIComponent(apiKey)}`;
+  return { wsUrl, session, apiKey };
+}
+
+/**
+ * Minimal CDP client over Steel session WebSocket.
+ * Attaches to the first page target and runs `handler({ send, sessionId })`.
+ */
+async function withCdpPage(sessionId, env, handler, { timeoutMs = 30000 } = {}) {
+  const { wsUrl } = await getSessionCdpEndpoint(sessionId, env);
+
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl);
+    let nextId = 1;
+    const pending = new Map();
+    let settled = false;
+    let pageSessionId = null;
+
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      try {
+        ws.close();
+      } catch {}
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+
+    const timer = setTimeout(
+      () => fail(new Error(`CDP timeout after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+
+    const send = (method, params = {}, sessionIdForCmd) => {
+      const id = nextId++;
+      const msg = { id, method, params };
+      if (sessionIdForCmd) msg.sessionId = sessionIdForCmd;
+      return new Promise((res, rej) => {
+        pending.set(id, { res, rej });
+        try {
+          ws.send(JSON.stringify(msg));
+        } catch (e) {
+          pending.delete(id);
+          rej(e);
+        }
+      });
+    };
+
+    const eventListeners = [];
+    const onEvent = (method, cb) => {
+      eventListeners.push({ method, cb });
+    };
+
+    ws.on("open", async () => {
+      try {
+        // Discover page targets
+        const { result } = await send("Target.getTargets");
+        const targets = result?.targetInfos || [];
+        const page =
+          targets.find((t) => t.type === "page" && !t.url?.startsWith("devtools:")) ||
+          targets.find((t) => t.type === "page");
+        if (!page) {
+          throw new Error(
+            `No page target found (targets: ${targets.map((t) => t.type).join(",") || "none"})`,
+          );
+        }
+
+        const attached = await send("Target.attachToTarget", {
+          targetId: page.targetId,
+          flatten: true,
+        });
+        pageSessionId = attached.result?.sessionId;
+        if (!pageSessionId) {
+          throw new Error("Failed to attach to page target");
+        }
+
+        const out = await handler({
+          send: (method, params = {}) => send(method, params, pageSessionId),
+          onEvent,
+          pageTarget: page,
+          browserSend: send,
+        });
+
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          try {
+            ws.close();
+          } catch {}
+          resolve(out);
+        }
+      } catch (e) {
+        fail(e);
+      }
+    });
+
+    ws.on("message", (data) => {
+      let msg;
+      try {
+        msg = JSON.parse(String(data));
+      } catch {
+        return;
+      }
+      if (msg.id != null && pending.has(msg.id)) {
+        const { res, rej } = pending.get(msg.id);
+        pending.delete(msg.id);
+        if (msg.error) rej(new Error(msg.error.message || JSON.stringify(msg.error)));
+        else res(msg);
+        return;
+      }
+      if (msg.method) {
+        for (const { method, cb } of eventListeners) {
+          if (method === msg.method || method === "*") {
+            try {
+              cb(msg);
+            } catch {}
+          }
+        }
+      }
+    });
+
+    ws.on("error", (err) => fail(err));
+    ws.on("close", () => {
+      if (!settled) fail(new Error("CDP WebSocket closed unexpectedly"));
+    });
+  });
+}
+
+
 function createServer(env = {}) {
   const server = new McpServer({
     name: "steel-browser",
-    version: "1.1.0",
+    version: "1.2.0",
     supportedProtocolVersions: [
       "2026-07-28",
       "2025-11-25",
@@ -571,6 +718,304 @@ function createServer(env = {}) {
             {
               type: "text",
               text: `Error screenshot session ${sessionId}: ${error.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+
+  // ── CDP: get element source by CSS selector ─────────────────────────────
+  server.registerTool(
+    "get-selector",
+    {
+      description:
+        "Get outerHTML / innerHTML / text / attribute of elements matching a CSS selector in a live Steel session (via CDP Runtime.evaluate). Requires an active session that already loaded a page.",
+      inputSchema: z.object({
+        sessionId: z.string().describe("Active Steel session ID"),
+        selector: z.string().describe("CSS selector, e.g. #main, .article, div.foo"),
+        property: z
+          .enum(["outerHTML", "innerHTML", "textContent", "innerText"])
+          .optional()
+          .describe("Which property to return (default: outerHTML)"),
+        attribute: z
+          .string()
+          .optional()
+          .describe("If set, return this attribute instead of property (e.g. href, src)"),
+        all: z
+          .boolean()
+          .optional()
+          .describe("Return all matches (default: first match only)"),
+        maxLength: z
+          .number()
+          .optional()
+          .describe("Truncate each result string to this many chars (default 50000)"),
+      }),
+    },
+    async ({
+      sessionId,
+      selector,
+      property,
+      attribute,
+      all,
+      maxLength,
+    }) => {
+      try {
+        const prop = property ?? "outerHTML";
+        const max = maxLength ?? 50000;
+        const result = await withCdpPage(sessionId, env, async ({ send }) => {
+          await send("Runtime.enable");
+          const expression = `
+            (() => {
+              const sel = ${JSON.stringify(selector)};
+              const attr = ${JSON.stringify(attribute ?? null)};
+              const prop = ${JSON.stringify(prop)};
+              const all = ${all ? "true" : "false"};
+              const nodes = all
+                ? Array.from(document.querySelectorAll(sel))
+                : (() => { const n = document.querySelector(sel); return n ? [n] : []; })();
+              return {
+                url: location.href,
+                title: document.title,
+                count: nodes.length,
+                items: nodes.map((el, i) => {
+                  let value;
+                  if (attr) value = el.getAttribute(attr);
+                  else if (prop === "textContent") value = el.textContent;
+                  else if (prop === "innerText") value = el.innerText;
+                  else if (prop === "innerHTML") value = el.innerHTML;
+                  else value = el.outerHTML;
+                  return { index: i, tag: el.tagName, value };
+                }),
+              };
+            })()
+          `;
+          const evalResult = await send("Runtime.evaluate", {
+            expression,
+            returnByValue: true,
+            awaitPromise: true,
+          });
+          if (evalResult.result?.exceptionDetails) {
+            throw new Error(
+              evalResult.result.exceptionDetails.text ||
+                JSON.stringify(evalResult.result.exceptionDetails),
+            );
+          }
+          return evalResult.result?.result?.value;
+        });
+
+        if (!result) {
+          return {
+            content: [{ type: "text", text: "No result from page evaluate" }],
+            isError: true,
+          };
+        }
+
+        let output = `URL: ${result.url}\nTitle: ${result.title}\nSelector: ${selector}\nMatches: ${result.count}\n\n`;
+        if (!result.count) {
+          output += "(no elements matched)\n";
+        } else {
+          for (const item of result.items) {
+            let v = item.value ?? "";
+            if (typeof v === "string" && v.length > max) {
+              v = v.slice(0, max) + `\n... [truncated, total ${item.value.length} chars]`;
+            }
+            output += `--- [${item.index}] <${item.tag}> ---\n${v}\n\n`;
+          }
+        }
+
+        return { content: [{ type: "text", text: output }] };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error get-selector on ${sessionId}: ${error.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // ── CDP: capture network requests for a time window ─────────────────────
+  server.registerTool(
+    "network-requests",
+    {
+      description:
+        "Capture network requests/responses on a live Steel session via CDP Network domain for a short listen window. Enable Network, collect requestWillBeSent + responseReceived, return summary (method, url, status, mimeType, resourceType).",
+      inputSchema: z.object({
+        sessionId: z.string().describe("Active Steel session ID"),
+        durationMs: z
+          .number()
+          .optional()
+          .describe("How long to listen in ms (default 5000, max 30000)"),
+        urlFilter: z
+          .string()
+          .optional()
+          .describe("Only include requests whose URL contains this substring"),
+        resourceTypes: z
+          .array(
+            z.enum([
+              "Document",
+              "Stylesheet",
+              "Image",
+              "Media",
+              "Font",
+              "Script",
+              "TextTrack",
+              "XHR",
+              "Fetch",
+              "Prefetch",
+              "EventSource",
+              "WebSocket",
+              "Manifest",
+              "SignedExchange",
+              "Ping",
+              "CSPViolationReport",
+              "Preflight",
+              "Other",
+            ]),
+          )
+          .optional()
+          .describe("Filter by resource type (e.g. XHR, Fetch, Document)"),
+        includeHeaders: z
+          .boolean()
+          .optional()
+          .describe("Include request/response headers (default false)"),
+      }),
+    },
+    async ({
+      sessionId,
+      durationMs,
+      urlFilter,
+      resourceTypes,
+      includeHeaders,
+    }) => {
+      try {
+        const listenMs = Math.min(Math.max(durationMs ?? 5000, 500), 30000);
+        const data = await withCdpPage(
+          sessionId,
+          env,
+          async ({ send, onEvent }) => {
+            const byId = new Map();
+
+            onEvent("Network.requestWillBeSent", (msg) => {
+              const p = msg.params || {};
+              const req = p.request || {};
+              byId.set(p.requestId, {
+                requestId: p.requestId,
+                url: req.url,
+                method: req.method,
+                resourceType: p.type,
+                timestamp: p.timestamp,
+                requestHeaders: req.headers,
+                status: null,
+                mimeType: null,
+                responseHeaders: null,
+              });
+            });
+
+            onEvent("Network.responseReceived", (msg) => {
+              const p = msg.params || {};
+              const res = p.response || {};
+              const existing = byId.get(p.requestId) || {
+                requestId: p.requestId,
+                url: res.url,
+              };
+              existing.status = res.status;
+              existing.mimeType = res.mimeType;
+              existing.resourceType = existing.resourceType || p.type;
+              existing.responseHeaders = res.headers;
+              byId.set(p.requestId, existing);
+            });
+
+            onEvent("Network.loadingFailed", (msg) => {
+              const p = msg.params || {};
+              const existing = byId.get(p.requestId) || {
+                requestId: p.requestId,
+              };
+              existing.failed = true;
+              existing.errorText = p.errorText;
+              byId.set(p.requestId, existing);
+            });
+
+            await send("Network.enable", {
+              maxTotalBufferSize: 10_000_000,
+              maxResourceBufferSize: 5_000_000,
+            });
+
+            // Also grab document URL for context
+            await send("Runtime.enable");
+            const pageInfo = await send("Runtime.evaluate", {
+              expression: "({ url: location.href, title: document.title })",
+              returnByValue: true,
+            });
+            const page = pageInfo.result?.result?.value || {};
+
+            await new Promise((r) => setTimeout(r, listenMs));
+
+            let items = [...byId.values()];
+            if (urlFilter) {
+              items = items.filter((i) => (i.url || "").includes(urlFilter));
+            }
+            if (resourceTypes?.length) {
+              const set = new Set(resourceTypes);
+              items = items.filter((i) => set.has(i.resourceType));
+            }
+
+            return {
+              page,
+              listenMs,
+              total: items.length,
+              requests: items.map((i) => {
+                const row = {
+                  method: i.method,
+                  url: i.url,
+                  status: i.status,
+                  mimeType: i.mimeType,
+                  resourceType: i.resourceType,
+                  failed: i.failed || false,
+                  errorText: i.errorText,
+                };
+                if (includeHeaders) {
+                  row.requestHeaders = i.requestHeaders;
+                  row.responseHeaders = i.responseHeaders;
+                }
+                return row;
+              }),
+            };
+          },
+          { timeoutMs: listenMs + 20000 },
+        );
+
+        let output = `Page: ${data.page?.title || "n/a"}\nURL: ${data.page?.url || "n/a"}\nListened: ${data.listenMs}ms\nCaptured: ${data.total} request(s)\n\n`;
+        const maxShow = 100;
+        data.requests.slice(0, maxShow).forEach((r, idx) => {
+          output += `${idx + 1}. [${r.method || "?"}] ${r.status ?? (r.failed ? "FAIL" : "?")} ${r.resourceType || ""} ${r.url || ""}\n`;
+          if (r.mimeType) output += `   mime: ${r.mimeType}\n`;
+          if (r.errorText) output += `   error: ${r.errorText}\n`;
+          if (includeHeaders && r.requestHeaders) {
+            output += `   req headers: ${JSON.stringify(r.requestHeaders)}\n`;
+          }
+          if (includeHeaders && r.responseHeaders) {
+            output += `   res headers: ${JSON.stringify(r.responseHeaders)}\n`;
+          }
+        });
+        if (data.total > maxShow) {
+          output += `\n... and ${data.total - maxShow} more\n`;
+        }
+
+        return { content: [{ type: "text", text: output }] };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error network-requests on ${sessionId}: ${error.message}`,
             },
           ],
           isError: true,
