@@ -1,4 +1,5 @@
 import {
+  createMcpHandler,
   McpServer,
   WebStandardStreamableHTTPServerTransport,
 } from "@modelcontextprotocol/server";
@@ -506,41 +507,11 @@ function createServer() {
   return server;
 }
 
-/**
- * Serves a single web-standard `Request` and resolves with a `Response`.
- * Each request gets a fresh McpServer instance (stateless) and a Streamable
- * HTTP transport with `enableJsonResponse: true`, so the SDK answers with
- * plain JSON instead of an SSE stream — required on runtimes such as
- * EdgeOne Pages that do not support streaming responses.
- */
-async function handleRequest(request) {
-  const server = createServer();
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
-  });
-  await server.connect(transport);
-  try {
-    return await transport.handleRequest(request);
-  } finally {
-    transport.close().catch(() => {});
-    server.close().catch(() => {});
-  }
-}
+const handler = createMcpHandler(createServer());
+const transport = new WebStandardStreamableHTTPServerTransport({
+  sessionIdGenerator: undefined,
+  enableJsonResponse: true,
+});
+await handler.connect(transport);
 
-/**
- * EdgeOne Pages function handler (Node/edge runtime).
- * Served at the `/mcp` route (file: edge-functions/mcp/index.js).
- * Receives the request via context and returns a `Response`.
- * Accepted EdgeOne signature: default export named `onRequest`.
- */
-export default async function onRequest(context) {
-  // Copy EdgeOne environment variables (context.env) into the store so the
-  // Steel API key can be read regardless of the runtime.
-  if (context && context.env) {
-    for (const [key, value] of Object.entries(context.env)) {
-      envStore[key] = value;
-    }
-  }
-  return handleRequest(context.request);
-}
+export default handler.fetch;
