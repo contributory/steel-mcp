@@ -1,21 +1,17 @@
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
-import * as z from "zod/v4";
-
-// Environment store that works on Node.js (`process.env`) and EdgeOne Pages
-// (`context.env`). EdgeOne functions receive env via the context argument, so
-// onRequest copies it into this store before handling the request.
-const envStore =
-  typeof globalThis.process !== "undefined" && globalThis.process.env
-    ? globalThis.process.env
-    : {};
+import { z } from "zod";
 
 const STEEL_API_BASE = "https://api.steel.dev";
 
 /**
  * Helper to make requests to Steel API
  */
-async function steelRequest(endpoint, options = {}) {
-  const apiKey = envStore.STEEL_API_KEY;
+async function steelRequest(endpoint, options = {}, env = {}) {
+  const apiKey =
+    env.STEEL_API_KEY ||
+    (typeof globalThis.process !== "undefined" &&
+      globalThis.process.env?.STEEL_API_KEY);
+
   if (!apiKey) {
     throw new Error("STEEL_API_KEY environment variable is required");
   }
@@ -40,11 +36,10 @@ async function steelRequest(endpoint, options = {}) {
   return response.json();
 }
 
-function createServer() {
+function createServer(env = {}) {
   const server = new McpServer({
     name: "steel-browser",
     version: "1.0.0",
-    // Support all protocol revisions understood by this SDK, including the modern 2026 revision.
     supportedProtocolVersions: [
       "2026-07-28",
       "2025-11-25",
@@ -56,36 +51,33 @@ function createServer() {
   });
 
   // Tool 1: Scrape a URL without browser session
-  server.registerTool(
+  server.tool(
     "scrape",
+    "Scrape content from a URL using Steel API. Returns HTML, markdown, cleaned HTML, readability text, metadata and extracted links.",
     {
-      description:
-        "Scrape content from a URL using Steel API. Returns HTML, markdown, cleaned HTML, readability text, metadata and extracted links.",
-      inputSchema: z.object({
-        url: z.string().url().describe("The URL to scrape"),
-        waitForSelector: z
-          .string()
-          .optional()
-          .describe("CSS selector to wait for before scraping"),
-        timeout: z
-          .number()
-          .optional()
-          .describe("Timeout in milliseconds (default: 30000)"),
-        removeSelector: z
-          .string()
-          .optional()
-          .describe("CSS selector to remove from page before scraping"),
-        onlyMainContent: z
-          .boolean()
-          .optional()
-          .describe(
-            "Only extract main content, excluding navigation and footers",
-          ),
-        includeLinks: z
-          .boolean()
-          .optional()
-          .describe("Include extracted links in response"),
-      }),
+      url: z.string().url().describe("The URL to scrape"),
+      waitForSelector: z
+        .string()
+        .optional()
+        .describe("CSS selector to wait for before scraping"),
+      timeout: z
+        .number()
+        .optional()
+        .describe("Timeout in milliseconds (default: 30000)"),
+      removeSelector: z
+        .string()
+        .optional()
+        .describe("CSS selector to remove from page before scraping"),
+      onlyMainContent: z
+        .boolean()
+        .optional()
+        .describe(
+          "Only extract main content, excluding navigation and footers",
+        ),
+      includeLinks: z
+        .boolean()
+        .optional()
+        .describe("Include extracted links in response"),
     },
     async ({
       url,
@@ -104,10 +96,14 @@ function createServer() {
           requestBody.onlyMainContent = onlyMainContent;
         if (includeLinks !== undefined) requestBody.includeLinks = includeLinks;
 
-        const result = await steelRequest("/v1/scrape", {
-          method: "POST",
-          body: JSON.stringify(requestBody),
-        });
+        const result = await steelRequest(
+          "/v1/scrape",
+          {
+            method: "POST",
+            body: JSON.stringify(requestBody),
+          },
+          env,
+        );
 
         let output = `URL: ${url}\n`;
         output += `Status: ${result.metadata?.status_code ?? "N/A"}\n`;
@@ -141,30 +137,27 @@ function createServer() {
   );
 
   // Tool 2: Create a browser session
-  server.registerTool(
+  server.tool(
     "create-session",
+    "Create a new Steel browser session for automation. Returns session ID and WebSocket URL for connecting Puppeteer/Playwright.",
     {
-      description:
-        "Create a new Steel browser session for automation. Returns session ID and WebSocket URL for connecting Puppeteer/Playwright.",
-      inputSchema: z.object({
-        sessionId: z
-          .string()
-          .uuid()
-          .optional()
-          .describe(
-            "Custom session ID (UUID). If not provided, Steel generates one.",
-          ),
-        useProxy: z.boolean().optional().describe("Use residential proxies"),
-        solveCaptcha: z
-          .boolean()
-          .optional()
-          .describe("Enable automatic CAPTCHA solving"),
-        recordVideo: z
-          .boolean()
-          .optional()
-          .describe("Record video of the session"),
-        timeout: z.number().optional().describe("Session timeout in seconds"),
-      }),
+      sessionId: z
+        .string()
+        .uuid()
+        .optional()
+        .describe(
+          "Custom session ID (UUID). If not provided, Steel generates one.",
+        ),
+      useProxy: z.boolean().optional().describe("Use residential proxies"),
+      solveCaptcha: z
+        .boolean()
+        .optional()
+        .describe("Enable automatic CAPTCHA solving"),
+      recordVideo: z
+        .boolean()
+        .optional()
+        .describe("Record video of the session"),
+      timeout: z.number().optional().describe("Session timeout in seconds"),
     },
     async ({ sessionId, useProxy, solveCaptcha, recordVideo, timeout }) => {
       try {
@@ -175,10 +168,14 @@ function createServer() {
         if (recordVideo !== undefined) requestBody.recordVideo = recordVideo;
         if (timeout) requestBody.timeout = timeout;
 
-        const session = await steelRequest("/v1/sessions", {
-          method: "POST",
-          body: JSON.stringify(requestBody),
-        });
+        const session = await steelRequest(
+          "/v1/sessions",
+          {
+            method: "POST",
+            body: JSON.stringify(requestBody),
+          },
+          env,
+        );
 
         let output = `Session created successfully!\n\n`;
         output += `Session ID: ${session.id}\n`;
@@ -209,20 +206,21 @@ function createServer() {
   );
 
   // Tool 3: Release a browser session
-  server.registerTool(
+  server.tool(
     "release-session",
+    "Release/end a Steel browser session. Always call this when done with a session to avoid charges.",
     {
-      description:
-        "Release/end a Steel browser session. Always call this when done with a session to avoid charges.",
-      inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to release"),
-      }),
+      sessionId: z.string().describe("The session ID to release"),
     },
     async ({ sessionId }) => {
       try {
-        await steelRequest(`/v1/sessions/${sessionId}`, {
-          method: "DELETE",
-        });
+        await steelRequest(
+          `/v1/sessions/${sessionId}`,
+          {
+            method: "DELETE",
+          },
+          env,
+        );
 
         return {
           content: [
@@ -247,17 +245,19 @@ function createServer() {
   );
 
   // Tool 4: Get session details
-  server.registerTool(
+  server.tool(
     "get-session",
+    "Get details about an existing Steel browser session.",
     {
-      description: "Get details about an existing Steel browser session.",
-      inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to retrieve"),
-      }),
+      sessionId: z.string().describe("The session ID to retrieve"),
     },
     async ({ sessionId }) => {
       try {
-        const session = await steelRequest(`/v1/sessions/${sessionId}`);
+        const session = await steelRequest(
+          `/v1/sessions/${sessionId}`,
+          {},
+          env,
+        );
 
         let output = `Session Details:\n\n`;
         output += `ID: ${session.id}\n`;
@@ -288,27 +288,24 @@ function createServer() {
   );
 
   // Tool 5: Navigate in a session
-  server.registerTool(
+  server.tool(
     "navigate",
+    "Navigate to a URL in an existing Steel browser session and optionally take a screenshot.",
     {
-      description:
-        "Navigate to a URL in an existing Steel browser session and optionally take a screenshot.",
-      inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to navigate in"),
-        url: z.string().url().describe("The URL to navigate to"),
-        waitForSelector: z
-          .string()
-          .optional()
-          .describe("CSS selector to wait for after navigation"),
-        timeout: z
-          .number()
-          .optional()
-          .describe("Navigation timeout in milliseconds"),
-        takeScreenshot: z
-          .boolean()
-          .optional()
-          .describe("Take a screenshot after navigation"),
-      }),
+      sessionId: z.string().describe("The session ID to navigate in"),
+      url: z.string().url().describe("The URL to navigate to"),
+      waitForSelector: z
+        .string()
+        .optional()
+        .describe("CSS selector to wait for after navigation"),
+      timeout: z
+        .number()
+        .optional()
+        .describe("Navigation timeout in milliseconds"),
+      takeScreenshot: z
+        .boolean()
+        .optional()
+        .describe("Take a screenshot after navigation"),
     },
     async ({ sessionId, url, waitForSelector, timeout, takeScreenshot }) => {
       try {
@@ -324,6 +321,7 @@ function createServer() {
             method: "POST",
             body: JSON.stringify(requestBody),
           },
+          env,
         );
 
         let output = `Navigated to: ${url}\n`;
@@ -351,31 +349,30 @@ function createServer() {
   );
 
   // Tool 6: Execute JavaScript in a session
-  server.registerTool(
+  server.tool(
     "execute-script",
+    "Execute JavaScript code in a Steel browser session and return the result.",
     {
-      description:
-        "Execute JavaScript code in a Steel browser session and return the result.",
-      inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to execute script in"),
-        script: z
-          .string()
-          .describe("JavaScript code to execute in the browser"),
-        awaitPromise: z
-          .boolean()
-          .optional()
-          .describe("Wait for the script to return a promise"),
-      }),
+      sessionId: z.string().describe("The session ID to execute script in"),
+      script: z.string().describe("JavaScript code to execute in the browser"),
+      awaitPromise: z
+        .boolean()
+        .optional()
+        .describe("Wait for the script to return a promise"),
     },
     async ({ sessionId, script, awaitPromise }) => {
       try {
         const requestBody = { script };
         if (awaitPromise !== undefined) requestBody.awaitPromise = awaitPromise;
 
-        const result = await steelRequest(`/v1/sessions/${sessionId}/execute`, {
-          method: "POST",
-          body: JSON.stringify(requestBody),
-        });
+        const result = await steelRequest(
+          `/v1/sessions/${sessionId}/execute`,
+          {
+            method: "POST",
+            body: JSON.stringify(requestBody),
+          },
+          env,
+        );
 
         let output = `Script executed in session ${sessionId}\n\n`;
         output += `Result:\n${JSON.stringify(result.result, null, 2)}\n`;
@@ -398,22 +395,16 @@ function createServer() {
   );
 
   // Tool 7: Take a screenshot
-  server.registerTool(
+  server.tool(
     "screenshot",
+    "Take a screenshot of the current page in a Steel browser session.",
     {
-      description:
-        "Take a screenshot of the current page in a Steel browser session.",
-      inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to take screenshot in"),
-        fullPage: z
-          .boolean()
-          .optional()
-          .describe("Capture full scrollable page"),
-        selector: z
-          .string()
-          .optional()
-          .describe("CSS selector of element to screenshot"),
-      }),
+      sessionId: z.string().describe("The session ID to take screenshot in"),
+      fullPage: z.boolean().optional().describe("Capture full scrollable page"),
+      selector: z
+        .string()
+        .optional()
+        .describe("CSS selector of element to screenshot"),
     },
     async ({ sessionId, fullPage, selector }) => {
       try {
@@ -427,11 +418,16 @@ function createServer() {
             method: "POST",
             body: JSON.stringify(requestBody),
           },
+          env,
         );
 
         let output = `Screenshot taken in session ${sessionId}\n\n`;
-        output += `Image (base64, first 500 chars):\n${result.screenshot.substring(0, 500)}...\n`;
-        output += `\nFull length: ${result.screenshot.length} characters\n`;
+        if (result.screenshot) {
+          output += `Image (base64, first 500 chars):\n${result.screenshot.substring(0, 500)}...\n`;
+          output += `\nFull length: ${result.screenshot.length} characters\n`;
+        } else {
+          output += `No screenshot data returned.\n`;
+        }
 
         return {
           content: [{ type: "text", text: output }],
@@ -451,28 +447,29 @@ function createServer() {
   );
 
   // Tool 8: Get page content
-  server.registerTool(
+  server.tool(
     "get-content",
+    "Get the current page content (HTML, markdown, text) from a Steel browser session.",
     {
-      description:
-        "Get the current page content (HTML, markdown, text) from a Steel browser session.",
-      inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to get content from"),
-        format: z
-          .enum(["html", "markdown", "text"])
-          .optional()
-          .describe("Content format to return"),
-      }),
+      sessionId: z.string().describe("The session ID to get content from"),
+      format: z
+        .enum(["html", "markdown", "text"])
+        .optional()
+        .describe("Content format to return"),
     },
     async ({ sessionId, format }) => {
       try {
         const requestBody = {};
         if (format) requestBody.format = format;
 
-        const result = await steelRequest(`/v1/sessions/${sessionId}/content`, {
-          method: "POST",
-          body: JSON.stringify(requestBody),
-        });
+        const result = await steelRequest(
+          `/v1/sessions/${sessionId}/content`,
+          {
+            method: "POST",
+            body: JSON.stringify(requestBody),
+          },
+          env,
+        );
 
         let output = `Page content from session ${sessionId}:\n\n`;
         if (result.content?.markdown) {
@@ -503,26 +500,25 @@ function createServer() {
   return server;
 }
 
-// v2 SDK expects a server FACTORY (called per request: modern + legacy legs),
-// not a shared instance — each request gets a fresh McpServer.
-const handler = createMcpHandler(
-  () => createServer(),
-  {
+// EdgeOne Pages entry point
+const onRequest = async (context) => {
+  const request = context instanceof Request ? context : context?.request;
+
+  if (!request) {
+    return new Response("Invalid request: No Request object provided", {
+      status: 400,
+    });
+  }
+
+  const env = context?.env || {};
+
+  const handler = createMcpHandler(() => createServer(env), {
     onerror: (error) => {
       console.error("[mcp-handler] onerror:", error);
     },
-  },
-);
+  });
 
-const mcpFetch = handler.fetch;
-
-// EdgeOne Pages calls onRequest(context) where context = { request, env, ... }.
-// The MCP SDK's fetch face expects the Request itself as the first argument,
-// so unwrap the context here (and support being called with a bare Request).
-const onRequest = async (context) => {
-  const request = context instanceof Request ? context : context?.request;
-  if (context?.env) Object.assign(envStore, context.env);
-  return mcpFetch(request);
+  return handler.fetch(request);
 };
 
 export default onRequest;
