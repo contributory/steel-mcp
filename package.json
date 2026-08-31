@@ -5,7 +5,6 @@
   "main": "src/mcp-handler.js",
   "type": "module",
   "scripts": {
-    "build:edge": "esbuild src/mcp-handler.js --bundle --format=esm --platform=browser --target=es2022 --outfile=edge-functions/mcp/index.js",
     "start": "node local-server.js",
     "dev": "node local-server.js"
   },
