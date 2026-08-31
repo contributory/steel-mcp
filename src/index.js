@@ -518,6 +518,8 @@ server.connect(transport);
 
 const handler = createMcpHandler(server);
 
-const onRequest = handler.fetch;
+const onRequest = async (req, res) => {
+  return await handler.fetch(req, res);
+};
 
 export default onRequest;
