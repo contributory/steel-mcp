@@ -518,4 +518,6 @@ server.connect(transport);
 
 const handler = createMcpHandler(server);
 
-export default handler.fetch;
+const onRequest = handler.fetch;
+
+export default onRequest;
