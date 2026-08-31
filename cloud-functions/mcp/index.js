@@ -8,6 +8,7 @@ const STEEL_API_BASE = "https://api.steel.dev";
 
 /**
  * Helper to make requests to Steel API
+ * @see https://docs.steel.dev/llms-full.txt
  */
 async function steelRequest(endpoint, options = {}, env = {}) {
   const apiKey =
@@ -36,13 +37,46 @@ async function steelRequest(endpoint, options = {}, env = {}) {
     throw new Error(`Steel API error: HTTP ${response.status} - ${errorText}`);
   }
 
-  return response.json();
+  // Some endpoints may return empty body
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text };
+  }
+}
+
+/** POST /v1/sessions/{id}/computer — mouse/keyboard/screenshot */
+async function computerAction(sessionId, body, env) {
+  return steelRequest(
+    `/v1/sessions/${sessionId}/computer`,
+    { method: "POST", body: JSON.stringify(body) },
+    env,
+  );
+}
+
+function formatComputerResult(result) {
+  let output = "";
+  if (result.base64_image) {
+    output += `Screenshot (base64, length ${result.base64_image.length}):\n`;
+    output += `${result.base64_image.slice(0, 200)}...\n`;
+  }
+  if (result.cursor_position) {
+    output += `Cursor: ${JSON.stringify(result.cursor_position)}\n`;
+  }
+  // Include other useful fields without dumping huge blobs
+  const { base64_image, ...rest } = result;
+  if (Object.keys(rest).length > 0) {
+    output += `\nResponse:\n${JSON.stringify(rest, null, 2)}\n`;
+  }
+  return output || JSON.stringify(result);
 }
 
 function createServer(env = {}) {
   const server = new McpServer({
     name: "steel-browser",
-    version: "1.0.0",
+    version: "1.1.0",
     supportedProtocolVersions: [
       "2026-07-28",
       "2025-11-25",
@@ -53,84 +87,82 @@ function createServer(env = {}) {
     ],
   });
 
-  // Tool 1: Scrape a URL without browser session
+  // ── Stateless: POST /v1/scrape ──────────────────────────────────────────
   server.registerTool(
     "scrape",
     {
       description:
-        "Scrape content from a URL using Steel API. Returns HTML, markdown, cleaned HTML, readability text, metadata and extracted links.",
+        "Scrape a URL with Steel (stateless). Returns markdown/html content, metadata, and links. Optional screenshot/pdf as hosted URLs. No session required.",
       inputSchema: z.object({
         url: z.string().url().describe("The URL to scrape"),
-        waitForSelector: z
-          .string()
+        format: z
+          .array(z.enum(["markdown", "html", "cleaned_html", "readability"]))
           .optional()
-          .describe("CSS selector to wait for before scraping"),
-        timeout: z
+          .describe("Content formats to return (default: markdown)"),
+        delay: z
           .number()
           .optional()
-          .describe("Timeout in milliseconds (default: 30000)"),
-        removeSelector: z
-          .string()
-          .optional()
-          .describe("CSS selector to remove from page before scraping"),
-        onlyMainContent: z
+          .describe("Wait ms after load for client-rendered content"),
+        useProxy: z
           .boolean()
           .optional()
-          .describe(
-            "Only extract main content, excluding navigation and footers",
-          ),
-        includeLinks: z
+          .describe("Route through Steel residential proxies"),
+        screenshot: z
           .boolean()
           .optional()
-          .describe("Include extracted links in response"),
+          .describe("Also capture a hosted screenshot URL"),
+        pdf: z.boolean().optional().describe("Also capture a hosted PDF URL"),
       }),
     },
-    async ({
-      url,
-      waitForSelector,
-      timeout,
-      removeSelector,
-      onlyMainContent,
-      includeLinks,
-    }) => {
+    async ({ url, format, delay, useProxy, screenshot, pdf }) => {
       try {
-        const requestBody = { url };
-        if (waitForSelector) requestBody.waitForSelector = waitForSelector;
-        if (timeout) requestBody.timeout = timeout;
-        if (removeSelector) requestBody.removeSelector = removeSelector;
-        if (onlyMainContent !== undefined)
-          requestBody.onlyMainContent = onlyMainContent;
-        if (includeLinks !== undefined) requestBody.includeLinks = includeLinks;
+        const requestBody = {
+          url,
+          format: format ?? ["markdown"],
+        };
+        if (delay !== undefined) requestBody.delay = delay;
+        if (useProxy !== undefined) requestBody.useProxy = useProxy;
+        if (screenshot !== undefined) requestBody.screenshot = screenshot;
+        if (pdf !== undefined) requestBody.pdf = pdf;
 
         const result = await steelRequest(
           "/v1/scrape",
-          {
-            method: "POST",
-            body: JSON.stringify(requestBody),
-          },
+          { method: "POST", body: JSON.stringify(requestBody) },
           env,
         );
 
         let output = `URL: ${url}\n`;
-        output += `Status: ${result.metadata?.status_code ?? "N/A"}\n`;
+        output += `Status: ${result.metadata?.statusCode ?? result.metadata?.status_code ?? "N/A"}\n`;
         output += `Title: ${result.metadata?.title ?? "N/A"}\n\n`;
 
-        if (result.content?.markdown) {
-          output += `--- Content (Markdown) ---\n${result.content.markdown}\n`;
-        } else if (result.content?.html) {
-          output += `--- Content (HTML) ---\n${result.content.html.substring(0, 5000)}...\n`;
+        const content = result.content ?? {};
+        if (content.markdown) {
+          output += `--- Markdown ---\n${content.markdown}\n`;
+        } else if (content.html) {
+          output += `--- HTML ---\n${String(content.html).slice(0, 8000)}\n`;
+        } else if (content.cleaned_html || content.cleanedHtml) {
+          output += `--- Cleaned HTML ---\n${String(content.cleaned_html ?? content.cleanedHtml).slice(0, 8000)}\n`;
+        } else if (content.readability) {
+          output += `--- Readability ---\n${JSON.stringify(content.readability).slice(0, 8000)}\n`;
         }
 
-        if (result.links && result.links.length > 0) {
-          output += `\n--- Extracted Links (${result.links.length}) ---\n`;
-          result.links.slice(0, 20).forEach((link) => {
-            output += `- ${link.href}${link.text ? ` (${link.text})` : ""}\n`;
+        if (result.links?.length) {
+          output += `\n--- Links (${result.links.length}) ---\n`;
+          result.links.slice(0, 30).forEach((link) => {
+            const href = link.url ?? link.href ?? "";
+            const text = link.text ?? "";
+            output += `- ${href}${text ? ` (${text})` : ""}\n`;
           });
         }
 
-        return {
-          content: [{ type: "text", text: output }],
-        };
+        if (result.screenshot?.url) {
+          output += `\nScreenshot: ${result.screenshot.url}\n`;
+        }
+        if (result.pdf?.url) {
+          output += `PDF: ${result.pdf.url}\n`;
+        }
+
+        return { content: [{ type: "text", text: output }] };
       } catch (error) {
         return {
           content: [
@@ -142,67 +174,116 @@ function createServer(env = {}) {
     },
   );
 
-  // Tool 2: Create a browser session
+  // ── Stateless: POST /v1/screenshot ──────────────────────────────────────
+  server.registerTool(
+    "screenshot-url",
+    {
+      description:
+        "Take a screenshot of a URL (stateless). Returns a hosted PNG URL. No session required.",
+      inputSchema: z.object({
+        url: z.string().url().describe("The URL to capture"),
+        fullPage: z
+          .boolean()
+          .optional()
+          .describe("Capture full scrollable page"),
+        useProxy: z.boolean().optional().describe("Use residential proxies"),
+      }),
+    },
+    async ({ url, fullPage, useProxy }) => {
+      try {
+        const requestBody = { url };
+        if (fullPage !== undefined) requestBody.fullPage = fullPage;
+        if (useProxy !== undefined) requestBody.useProxy = useProxy;
+
+        const result = await steelRequest(
+          "/v1/screenshot",
+          { method: "POST", body: JSON.stringify(requestBody) },
+          env,
+        );
+
+        const hosted = result.url ?? result.screenshot?.url ?? "(no url)";
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Screenshot of ${url}\nHosted URL: ${hosted}\n`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error screenshotting ${url}: ${error.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // ── Session lifecycle ───────────────────────────────────────────────────
   server.registerTool(
     "create-session",
     {
       description:
-        "Create a new Steel browser session for automation. Returns session ID and WebSocket URL for connecting Puppeteer/Playwright.",
+        "Create a Steel cloud browser session. Returns session ID, CDP websocketUrl, and sessionViewerUrl. Drive the browser via computer actions or connect Puppeteer/Playwright over CDP. Always call release-session when done.",
       inputSchema: z.object({
         sessionId: z
           .string()
           .uuid()
           .optional()
-          .describe(
-            "Custom session ID (UUID). If not provided, Steel generates one.",
-          ),
+          .describe("Optional custom session UUID"),
         useProxy: z.boolean().optional().describe("Use residential proxies"),
         solveCaptcha: z
           .boolean()
           .optional()
           .describe("Enable automatic CAPTCHA solving"),
-        recordVideo: z
-          .boolean()
+        timeout: z
+          .number()
           .optional()
-          .describe("Record video of the session"),
-        timeout: z.number().optional().describe("Session timeout in seconds"),
+          .describe("Session timeout in milliseconds (Steel default ~5 min)"),
+        dimensions: z
+          .object({
+            width: z.number(),
+            height: z.number(),
+          })
+          .optional()
+          .describe("Viewport dimensions (recommended for computer-use)"),
       }),
     },
-    async ({ sessionId, useProxy, solveCaptcha, recordVideo, timeout }) => {
+    async ({ sessionId, useProxy, solveCaptcha, timeout, dimensions }) => {
       try {
         const requestBody = {};
         if (sessionId) requestBody.sessionId = sessionId;
         if (useProxy !== undefined) requestBody.useProxy = useProxy;
         if (solveCaptcha !== undefined) requestBody.solveCaptcha = solveCaptcha;
-        if (recordVideo !== undefined) requestBody.recordVideo = recordVideo;
-        if (timeout) requestBody.timeout = timeout;
+        if (timeout !== undefined) requestBody.timeout = timeout;
+        if (dimensions) requestBody.dimensions = dimensions;
 
         const session = await steelRequest(
           "/v1/sessions",
-          {
-            method: "POST",
-            body: JSON.stringify(requestBody),
-          },
+          { method: "POST", body: JSON.stringify(requestBody) },
           env,
         );
 
+        const apiKeyHint = "YOUR_API_KEY";
         let output = `Session created successfully!\n\n`;
         output += `Session ID: ${session.id}\n`;
-        output += `WebSocket URL: ${session.websocketUrl}\n`;
-        output += `Created at: ${session.createdAt}\n`;
-        if (session.expiresAt) {
-          output += `Expires at: ${session.expiresAt}\n`;
+        output += `Status: ${session.status ?? "n/a"}\n`;
+        output += `WebSocket (CDP): ${session.websocketUrl ?? session.websocket_url ?? "n/a"}\n`;
+        if (session.sessionViewerUrl || session.debugUrl) {
+          output += `Live viewer: ${session.sessionViewerUrl ?? session.debugUrl}\n`;
         }
+        output += `Created at: ${session.createdAt ?? session.created_at ?? "n/a"}\n`;
 
-        output += `\n--- How to connect with Puppeteer ---\n`;
-        output += `import puppeteer from 'puppeteer-core';\n`;
-        output += `const browser = await puppeteer.connect({\n`;
-        output += `  browserWSEndpoint: \`${session.websocketUrl}&apiKey=YOUR_API_KEY\`\n`;
-        output += `});\n`;
+        output += `\n--- CDP connect (Puppeteer) ---\n`;
+        output += `browserWSEndpoint: \`${session.websocketUrl ?? session.websocket_url}&apiKey=${apiKeyHint}\`\n`;
+        output += `\nDrive via tools: navigate, computer, session-screenshot. Call release-session when done.\n`;
 
-        return {
-          content: [{ type: "text", text: output }],
-        };
+        return { content: [{ type: "text", text: output }] };
       } catch (error) {
         return {
           content: [
@@ -214,12 +295,56 @@ function createServer(env = {}) {
     },
   );
 
-  // Tool 3: Release a browser session
+  server.registerTool(
+    "get-session",
+    {
+      description: "Get details about an existing Steel browser session.",
+      inputSchema: z.object({
+        sessionId: z.string().describe("The session ID"),
+      }),
+    },
+    async ({ sessionId }) => {
+      try {
+        const session = await steelRequest(
+          `/v1/sessions/${sessionId}`,
+          {},
+          env,
+        );
+
+        let output = `Session Details:\n\n`;
+        output += `ID: ${session.id}\n`;
+        output += `Status: ${session.status}\n`;
+        output += `Created at: ${session.createdAt ?? session.created_at}\n`;
+        if (session.expiresAt || session.expires_at) {
+          output += `Expires at: ${session.expiresAt ?? session.expires_at}\n`;
+        }
+        if (session.websocketUrl || session.websocket_url) {
+          output += `WebSocket URL: ${session.websocketUrl ?? session.websocket_url}\n`;
+        }
+        if (session.sessionViewerUrl || session.debugUrl) {
+          output += `Live viewer: ${session.sessionViewerUrl ?? session.debugUrl}\n`;
+        }
+
+        return { content: [{ type: "text", text: output }] };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting session ${sessionId}: ${error.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
   server.registerTool(
     "release-session",
     {
       description:
-        "Release/end a Steel browser session. Always call this when done with a session to avoid charges.",
+        "Release/end a Steel browser session. Always call this when done to avoid charges.",
       inputSchema: z.object({
         sessionId: z.string().describe("The session ID to release"),
       }),
@@ -228,12 +353,9 @@ function createServer(env = {}) {
       try {
         await steelRequest(
           `/v1/sessions/${sessionId}`,
-          {
-            method: "DELETE",
-          },
+          { method: "DELETE" },
           env,
         );
-
         return {
           content: [
             {
@@ -256,43 +378,94 @@ function createServer(env = {}) {
     },
   );
 
-  // Tool 4: Get session details
+  // ── Session drive: Computer API ─────────────────────────────────────────
+  // POST /v1/sessions/{id}/computer
+  // Actions: move_mouse | click_mouse | drag_mouse | scroll | press_key |
+  //          type_text | wait | take_screenshot | get_cursor_position
+
   server.registerTool(
-    "get-session",
+    "computer",
     {
-      description: "Get details about an existing Steel browser session.",
+      description:
+        "Execute a Steel Computer Use action on a live session (POST /v1/sessions/{id}/computer). Actions: move_mouse, click_mouse, drag_mouse, scroll, press_key, type_text, wait, take_screenshot, get_cursor_position.",
       inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to retrieve"),
+        sessionId: z.string().describe("Active Steel session ID"),
+        action: z
+          .enum([
+            "move_mouse",
+            "click_mouse",
+            "drag_mouse",
+            "scroll",
+            "press_key",
+            "type_text",
+            "wait",
+            "take_screenshot",
+            "get_cursor_position",
+          ])
+          .describe("Computer action type"),
+        coordinates: z
+          .object({ x: z.number(), y: z.number() })
+          .optional()
+          .describe("Pointer coordinates for move/click/drag/scroll"),
+        button: z
+          .enum(["left", "right", "middle"])
+          .optional()
+          .describe("Mouse button for click"),
+        keys: z
+          .array(z.string())
+          .optional()
+          .describe('Keys for press_key, e.g. ["Control", "l"] or ["Enter"]'),
+        text: z.string().optional().describe("Text for type_text"),
+        duration: z
+          .number()
+          .optional()
+          .describe("Wait duration in seconds (action=wait)"),
+        path: z
+          .array(z.object({ x: z.number(), y: z.number() }))
+          .optional()
+          .describe("Path points for drag_mouse"),
+        screenshot: z
+          .boolean()
+          .optional()
+          .describe("Request a screenshot in the response after the action"),
       }),
     },
-    async ({ sessionId }) => {
+    async ({
+      sessionId,
+      action,
+      coordinates,
+      button,
+      keys,
+      text,
+      duration,
+      path,
+      screenshot,
+    }) => {
       try {
-        const session = await steelRequest(
-          `/v1/sessions/${sessionId}`,
-          {},
-          env,
-        );
+        const body = { action };
+        if (coordinates) body.coordinates = coordinates;
+        if (button) body.button = button;
+        if (keys) body.keys = keys;
+        if (text !== undefined) body.text = text;
+        if (duration !== undefined) body.duration = duration;
+        if (path) body.path = path;
+        if (screenshot !== undefined) body.screenshot = screenshot;
 
-        let output = `Session Details:\n\n`;
-        output += `ID: ${session.id}\n`;
-        output += `Status: ${session.status}\n`;
-        output += `Created at: ${session.createdAt}\n`;
-        if (session.expiresAt) {
-          output += `Expires at: ${session.expiresAt}\n`;
-        }
-        if (session.websocketUrl) {
-          output += `WebSocket URL: ${session.websocketUrl}\n`;
-        }
-
+        const result = await computerAction(sessionId, body, env);
         return {
-          content: [{ type: "text", text: output }],
+          content: [
+            {
+              type: "text",
+              text: `Action ${action} on session ${sessionId}\n\n${formatComputerResult(result)}`,
+            },
+          ],
         };
       } catch (error) {
         return {
           content: [
             {
               type: "text",
-              text: `Error getting session ${sessionId}: ${error.message}`,
+              text: `Error computer action on ${sessionId}: ${error.message}`,
             },
           ],
           isError: true,
@@ -301,62 +474,65 @@ function createServer(env = {}) {
     },
   );
 
-  // Tool 5: Navigate in a session
+  // Navigate via address bar (Ctrl/Meta+L → type URL → Enter) as in Steel recipes
   server.registerTool(
     "navigate",
     {
       description:
-        "Navigate to a URL in an existing Steel browser session and optionally take a screenshot.",
+        "Navigate a live session to a URL using the Computer API (focus address bar, type URL, Enter). Requires an active session from create-session.",
       inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to navigate in"),
-        url: z.string().url().describe("The URL to navigate to"),
-        waitForSelector: z
-          .string()
-          .optional()
-          .describe("CSS selector to wait for after navigation"),
-        timeout: z
+        sessionId: z.string().describe("Active Steel session ID"),
+        url: z.string().url().describe("URL to open"),
+        waitSeconds: z
           .number()
           .optional()
-          .describe("Navigation timeout in milliseconds"),
-        takeScreenshot: z
-          .boolean()
-          .optional()
-          .describe("Take a screenshot after navigation"),
+          .describe("Seconds to wait after navigation (default 2)"),
       }),
     },
-    async ({ sessionId, url, waitForSelector, timeout, takeScreenshot }) => {
+    async ({ sessionId, url, waitSeconds }) => {
       try {
-        const requestBody = { url };
-        if (waitForSelector) requestBody.waitForSelector = waitForSelector;
-        if (timeout) requestBody.timeout = timeout;
-        if (takeScreenshot !== undefined)
-          requestBody.takeScreenshot = takeScreenshot;
-
-        const result = await steelRequest(
-          `/v1/sessions/${sessionId}/navigate`,
-          {
-            method: "POST",
-            body: JSON.stringify(requestBody),
-          },
+        // Focus omnibox
+        await computerAction(
+          sessionId,
+          { action: "press_key", keys: ["Control", "l"] },
+          env,
+        );
+        await computerAction(
+          sessionId,
+          { action: "type_text", text: url },
+          env,
+        );
+        await computerAction(
+          sessionId,
+          { action: "press_key", keys: ["Enter"] },
+          env,
+        );
+        const wait = waitSeconds ?? 2;
+        await computerAction(
+          sessionId,
+          { action: "wait", duration: wait },
+          env,
+        );
+        const shot = await computerAction(
+          sessionId,
+          { action: "take_screenshot" },
           env,
         );
 
-        let output = `Navigated to: ${url}\n`;
-        output += `Session: ${sessionId}\n`;
-
-        if (result.screenshot) {
-          output += `\nScreenshot (base64): ${result.screenshot.substring(0, 200)}...\n`;
-        }
-
         return {
-          content: [{ type: "text", text: output }],
+          content: [
+            {
+              type: "text",
+              text: `Navigated session ${sessionId} to ${url}\n\n${formatComputerResult(shot)}`,
+            },
+          ],
         };
       } catch (error) {
         return {
           content: [
             {
               type: "text",
-              text: `Error navigating in session ${sessionId}: ${error.message}`,
+              text: `Error navigating session ${sessionId}: ${error.message}`,
             },
           ],
           isError: true,
@@ -365,161 +541,36 @@ function createServer(env = {}) {
     },
   );
 
-  // Tool 6: Execute JavaScript in a session
   server.registerTool(
-    "execute-script",
+    "session-screenshot",
     {
       description:
-        "Execute JavaScript code in a Steel browser session and return the result.",
+        "Screenshot the current page in a live Steel session via Computer API (action=take_screenshot). Returns base64 image metadata.",
       inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to execute script in"),
-        script: z
-          .string()
-          .describe("JavaScript code to execute in the browser"),
-        awaitPromise: z
-          .boolean()
-          .optional()
-          .describe("Wait for the script to return a promise"),
+        sessionId: z.string().describe("Active Steel session ID"),
       }),
     },
-    async ({ sessionId, script, awaitPromise }) => {
+    async ({ sessionId }) => {
       try {
-        const requestBody = { script };
-        if (awaitPromise !== undefined) requestBody.awaitPromise = awaitPromise;
-
-        const result = await steelRequest(
-          `/v1/sessions/${sessionId}/execute`,
-          {
-            method: "POST",
-            body: JSON.stringify(requestBody),
-          },
+        const result = await computerAction(
+          sessionId,
+          { action: "take_screenshot" },
           env,
         );
-
-        let output = `Script executed in session ${sessionId}\n\n`;
-        output += `Result:\n${JSON.stringify(result.result, null, 2)}\n`;
-
-        return {
-          content: [{ type: "text", text: output }],
-        };
-      } catch (error) {
         return {
           content: [
             {
               type: "text",
-              text: `Error executing script in session ${sessionId}: ${error.message}`,
+              text: `Session ${sessionId} screenshot\n\n${formatComputerResult(result)}`,
             },
           ],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  // Tool 7: Take a screenshot
-  server.registerTool(
-    "screenshot",
-    {
-      description:
-        "Take a screenshot of the current page in a Steel browser session.",
-      inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to take screenshot in"),
-        fullPage: z
-          .boolean()
-          .optional()
-          .describe("Capture full scrollable page"),
-        selector: z
-          .string()
-          .optional()
-          .describe("CSS selector of element to screenshot"),
-      }),
-    },
-    async ({ sessionId, fullPage, selector }) => {
-      try {
-        const requestBody = {};
-        if (fullPage !== undefined) requestBody.fullPage = fullPage;
-        if (selector) requestBody.selector = selector;
-
-        const result = await steelRequest(
-          `/v1/sessions/${sessionId}/screenshot`,
-          {
-            method: "POST",
-            body: JSON.stringify(requestBody),
-          },
-          env,
-        );
-
-        let output = `Screenshot taken in session ${sessionId}\n\n`;
-        if (result.screenshot) {
-          output += `Image (base64, first 500 chars):\n${result.screenshot.substring(0, 500)}...\n`;
-          output += `\nFull length: ${result.screenshot.length} characters\n`;
-        } else {
-          output += `No screenshot data returned.\n`;
-        }
-
-        return {
-          content: [{ type: "text", text: output }],
         };
       } catch (error) {
         return {
           content: [
             {
               type: "text",
-              text: `Error taking screenshot in session ${sessionId}: ${error.message}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
-
-  // Tool 8: Get page content
-  server.registerTool(
-    "get-content",
-    {
-      description:
-        "Get the current page content (HTML, markdown, text) from a Steel browser session.",
-      inputSchema: z.object({
-        sessionId: z.string().describe("The session ID to get content from"),
-        format: z
-          .enum(["html", "markdown", "text"])
-          .optional()
-          .describe("Content format to return"),
-      }),
-    },
-    async ({ sessionId, format }) => {
-      try {
-        const requestBody = {};
-        if (format) requestBody.format = format;
-
-        const result = await steelRequest(
-          `/v1/sessions/${sessionId}/content`,
-          {
-            method: "POST",
-            body: JSON.stringify(requestBody),
-          },
-          env,
-        );
-
-        let output = `Page content from session ${sessionId}:\n\n`;
-        if (result.content?.markdown) {
-          output += `--- Markdown ---\n${result.content.markdown.substring(0, 3000)}\n`;
-        } else if (result.content?.html) {
-          output += `--- HTML ---\n${result.content.html.substring(0, 3000)}\n`;
-        } else if (result.content?.text) {
-          output += `--- Text ---\n${result.content.text.substring(0, 3000)}\n`;
-        }
-
-        return {
-          content: [{ type: "text", text: output }],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error getting content from session ${sessionId}: ${error.message}`,
+              text: `Error screenshot session ${sessionId}: ${error.message}`,
             },
           ],
           isError: true,
@@ -531,9 +582,7 @@ function createServer(env = {}) {
   return server;
 }
 
-// EdgeOne Pages entry point — fully stateless (no MCP session).
-// Each request creates a fresh server + transport. JSON-only responses
-// (enableJsonResponse) avoid SSE, which EdgeOne does not support reliably.
+// EdgeOne Pages — fully stateless MCP transport (JSON only, no session sticky)
 const onRequest = async (context) => {
   const request = context instanceof Request ? context : context?.request;
 
@@ -548,7 +597,6 @@ const onRequest = async (context) => {
     );
   }
 
-  // Only POST is meaningful in stateless Streamable HTTP.
   if (request.method.toUpperCase() !== "POST") {
     return new Response(
       JSON.stringify({
@@ -563,8 +611,8 @@ const onRequest = async (context) => {
   const env = context?.env || {};
   const server = createServer(env);
   const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // stateless — no Mcp-Session-Id
-    enableJsonResponse: true, // pure JSON, no SSE stream
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
   });
 
   try {
@@ -584,7 +632,6 @@ const onRequest = async (context) => {
       { status: 500, headers: { "content-type": "application/json" } },
     );
   } finally {
-    // Best-effort cleanup; ignore failures after the response is sent.
     try {
       await transport.close();
     } catch {}
