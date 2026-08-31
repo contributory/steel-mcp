@@ -1,5 +1,5 @@
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
-import { z } from "zod";
+import { z } from "zod/v4";
 
 const STEEL_API_BASE = "https://api.steel.dev";
 
@@ -51,33 +51,36 @@ function createServer(env = {}) {
   });
 
   // Tool 1: Scrape a URL without browser session
-  server.tool(
+  server.registerTool(
     "scrape",
-    "Scrape content from a URL using Steel API. Returns HTML, markdown, cleaned HTML, readability text, metadata and extracted links.",
     {
-      url: z.string().url().describe("The URL to scrape"),
-      waitForSelector: z
-        .string()
-        .optional()
-        .describe("CSS selector to wait for before scraping"),
-      timeout: z
-        .number()
-        .optional()
-        .describe("Timeout in milliseconds (default: 30000)"),
-      removeSelector: z
-        .string()
-        .optional()
-        .describe("CSS selector to remove from page before scraping"),
-      onlyMainContent: z
-        .boolean()
-        .optional()
-        .describe(
-          "Only extract main content, excluding navigation and footers",
-        ),
-      includeLinks: z
-        .boolean()
-        .optional()
-        .describe("Include extracted links in response"),
+      description:
+        "Scrape content from a URL using Steel API. Returns HTML, markdown, cleaned HTML, readability text, metadata and extracted links.",
+      inputSchema: z.object({
+        url: z.string().url().describe("The URL to scrape"),
+        waitForSelector: z
+          .string()
+          .optional()
+          .describe("CSS selector to wait for before scraping"),
+        timeout: z
+          .number()
+          .optional()
+          .describe("Timeout in milliseconds (default: 30000)"),
+        removeSelector: z
+          .string()
+          .optional()
+          .describe("CSS selector to remove from page before scraping"),
+        onlyMainContent: z
+          .boolean()
+          .optional()
+          .describe(
+            "Only extract main content, excluding navigation and footers",
+          ),
+        includeLinks: z
+          .boolean()
+          .optional()
+          .describe("Include extracted links in response"),
+      }),
     },
     async ({
       url,
@@ -137,27 +140,30 @@ function createServer(env = {}) {
   );
 
   // Tool 2: Create a browser session
-  server.tool(
+  server.registerTool(
     "create-session",
-    "Create a new Steel browser session for automation. Returns session ID and WebSocket URL for connecting Puppeteer/Playwright.",
     {
-      sessionId: z
-        .string()
-        .uuid()
-        .optional()
-        .describe(
-          "Custom session ID (UUID). If not provided, Steel generates one.",
-        ),
-      useProxy: z.boolean().optional().describe("Use residential proxies"),
-      solveCaptcha: z
-        .boolean()
-        .optional()
-        .describe("Enable automatic CAPTCHA solving"),
-      recordVideo: z
-        .boolean()
-        .optional()
-        .describe("Record video of the session"),
-      timeout: z.number().optional().describe("Session timeout in seconds"),
+      description:
+        "Create a new Steel browser session for automation. Returns session ID and WebSocket URL for connecting Puppeteer/Playwright.",
+      inputSchema: z.object({
+        sessionId: z
+          .string()
+          .uuid()
+          .optional()
+          .describe(
+            "Custom session ID (UUID). If not provided, Steel generates one.",
+          ),
+        useProxy: z.boolean().optional().describe("Use residential proxies"),
+        solveCaptcha: z
+          .boolean()
+          .optional()
+          .describe("Enable automatic CAPTCHA solving"),
+        recordVideo: z
+          .boolean()
+          .optional()
+          .describe("Record video of the session"),
+        timeout: z.number().optional().describe("Session timeout in seconds"),
+      }),
     },
     async ({ sessionId, useProxy, solveCaptcha, recordVideo, timeout }) => {
       try {
@@ -206,11 +212,14 @@ function createServer(env = {}) {
   );
 
   // Tool 3: Release a browser session
-  server.tool(
+  server.registerTool(
     "release-session",
-    "Release/end a Steel browser session. Always call this when done with a session to avoid charges.",
     {
-      sessionId: z.string().describe("The session ID to release"),
+      description:
+        "Release/end a Steel browser session. Always call this when done with a session to avoid charges.",
+      inputSchema: z.object({
+        sessionId: z.string().describe("The session ID to release"),
+      }),
     },
     async ({ sessionId }) => {
       try {
@@ -245,11 +254,13 @@ function createServer(env = {}) {
   );
 
   // Tool 4: Get session details
-  server.tool(
+  server.registerTool(
     "get-session",
-    "Get details about an existing Steel browser session.",
     {
-      sessionId: z.string().describe("The session ID to retrieve"),
+      description: "Get details about an existing Steel browser session.",
+      inputSchema: z.object({
+        sessionId: z.string().describe("The session ID to retrieve"),
+      }),
     },
     async ({ sessionId }) => {
       try {
@@ -288,24 +299,27 @@ function createServer(env = {}) {
   );
 
   // Tool 5: Navigate in a session
-  server.tool(
+  server.registerTool(
     "navigate",
-    "Navigate to a URL in an existing Steel browser session and optionally take a screenshot.",
     {
-      sessionId: z.string().describe("The session ID to navigate in"),
-      url: z.string().url().describe("The URL to navigate to"),
-      waitForSelector: z
-        .string()
-        .optional()
-        .describe("CSS selector to wait for after navigation"),
-      timeout: z
-        .number()
-        .optional()
-        .describe("Navigation timeout in milliseconds"),
-      takeScreenshot: z
-        .boolean()
-        .optional()
-        .describe("Take a screenshot after navigation"),
+      description:
+        "Navigate to a URL in an existing Steel browser session and optionally take a screenshot.",
+      inputSchema: z.object({
+        sessionId: z.string().describe("The session ID to navigate in"),
+        url: z.string().url().describe("The URL to navigate to"),
+        waitForSelector: z
+          .string()
+          .optional()
+          .describe("CSS selector to wait for after navigation"),
+        timeout: z
+          .number()
+          .optional()
+          .describe("Navigation timeout in milliseconds"),
+        takeScreenshot: z
+          .boolean()
+          .optional()
+          .describe("Take a screenshot after navigation"),
+      }),
     },
     async ({ sessionId, url, waitForSelector, timeout, takeScreenshot }) => {
       try {
@@ -349,16 +363,21 @@ function createServer(env = {}) {
   );
 
   // Tool 6: Execute JavaScript in a session
-  server.tool(
+  server.registerTool(
     "execute-script",
-    "Execute JavaScript code in a Steel browser session and return the result.",
     {
-      sessionId: z.string().describe("The session ID to execute script in"),
-      script: z.string().describe("JavaScript code to execute in the browser"),
-      awaitPromise: z
-        .boolean()
-        .optional()
-        .describe("Wait for the script to return a promise"),
+      description:
+        "Execute JavaScript code in a Steel browser session and return the result.",
+      inputSchema: z.object({
+        sessionId: z.string().describe("The session ID to execute script in"),
+        script: z
+          .string()
+          .describe("JavaScript code to execute in the browser"),
+        awaitPromise: z
+          .boolean()
+          .optional()
+          .describe("Wait for the script to return a promise"),
+      }),
     },
     async ({ sessionId, script, awaitPromise }) => {
       try {
@@ -395,16 +414,22 @@ function createServer(env = {}) {
   );
 
   // Tool 7: Take a screenshot
-  server.tool(
+  server.registerTool(
     "screenshot",
-    "Take a screenshot of the current page in a Steel browser session.",
     {
-      sessionId: z.string().describe("The session ID to take screenshot in"),
-      fullPage: z.boolean().optional().describe("Capture full scrollable page"),
-      selector: z
-        .string()
-        .optional()
-        .describe("CSS selector of element to screenshot"),
+      description:
+        "Take a screenshot of the current page in a Steel browser session.",
+      inputSchema: z.object({
+        sessionId: z.string().describe("The session ID to take screenshot in"),
+        fullPage: z
+          .boolean()
+          .optional()
+          .describe("Capture full scrollable page"),
+        selector: z
+          .string()
+          .optional()
+          .describe("CSS selector of element to screenshot"),
+      }),
     },
     async ({ sessionId, fullPage, selector }) => {
       try {
@@ -447,15 +472,18 @@ function createServer(env = {}) {
   );
 
   // Tool 8: Get page content
-  server.tool(
+  server.registerTool(
     "get-content",
-    "Get the current page content (HTML, markdown, text) from a Steel browser session.",
     {
-      sessionId: z.string().describe("The session ID to get content from"),
-      format: z
-        .enum(["html", "markdown", "text"])
-        .optional()
-        .describe("Content format to return"),
+      description:
+        "Get the current page content (HTML, markdown, text) from a Steel browser session.",
+      inputSchema: z.object({
+        sessionId: z.string().describe("The session ID to get content from"),
+        format: z
+          .enum(["html", "markdown", "text"])
+          .optional()
+          .describe("Content format to return"),
+      }),
     },
     async ({ sessionId, format }) => {
       try {
